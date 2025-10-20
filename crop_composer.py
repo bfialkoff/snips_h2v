@@ -204,13 +204,23 @@ def apply_crop(
 
         # Step 2: Handle audio with FFmpeg (resize to target resolution here if needed)
         try:
-            # Check if input has audio stream
+            # Check if input has audio stream and get video info
             probe = ffmpeg.probe(input_path)
             has_audio = any(stream['codec_type'] == 'audio' for stream in probe['streams'])
+            video_stream = next((stream for stream in probe['streams'] if stream['codec_type'] == 'video'), None)
 
-            # Determine final output resolution (9:16 aspect ratio)
-            target_width = 1080
-            target_height = 1920
+            if not video_stream:
+                raise ValueError("No video stream found")
+
+            # Calculate target resolution based on original video dimensions
+            # Use the larger dimension as height for vertical video (9:16 aspect ratio)
+            original_width = int(video_stream['width'])
+            original_height = int(video_stream['height'])
+
+            # For vertical output, we want 9:16 aspect ratio
+            # Use the original frame's larger dimension as our target height
+            target_height = max(original_width, original_height)
+            target_width = int(target_height * (9/16))
 
             if has_audio:
                 # Combine processed video with original audio, resize to target resolution

@@ -9,10 +9,9 @@ the main point of interest centered using automated focus tracking.
 import argparse
 import time
 import sys
-import os
-import shutil
 from pathlib import Path
 
+import cv2
 
 import scene_detector
 import focus_tracker
@@ -24,7 +23,6 @@ import utils
 def process_video(
         input_path: str,
         output_path: str,
-        stride: int = 2,
         smoothing_method: str = 'rolling',
         smoothing_window: int = 5,
         verbose: bool = False,
@@ -36,7 +34,6 @@ def process_video(
     Args:
         input_path: Path to input video file
         output_path: Path to output video file (JSON will be auto-generated as output_path + '.json')
-        stride: Frame sampling stride (1=every frame, 2=every other frame)
         smoothing_method: Smoothing method ('rolling', 'gaussian', 'kalman')
         smoothing_window: Window size for smoothing
         verbose: Enable verbose logging
@@ -85,8 +82,8 @@ def process_video(
         debug_collector = utils.DebugVideoCollector(debug_output_path, input_path)
 
         # Calculate total expected frames for proper progress tracking
-        # This should be the number of frames that will actually be processed (with stride)
-        import cv2
+        # This should be the number of frames that will actually be processed
+
         cap = cv2.VideoCapture(input_path)
         fps = cap.get(cv2.CAP_PROP_FPS)
         cap.release()
@@ -96,9 +93,7 @@ def process_video(
         for shot in shots:
             shot_duration = shot.end - shot.start
             shot_frames = int(shot_duration * fps)
-            # Apply stride to get actual processed frames
-            processed_frames_in_shot = (shot_frames // stride) + (1 if shot_frames % stride > 0 else 0)
-            total_processed_frames += processed_frames_in_shot
+            total_processed_frames += shot_frames
 
         debug_collector.set_total_frames(total_processed_frames)
 
@@ -111,7 +106,6 @@ def process_video(
             input_path,
             start_time=shot.start,
             end_time=shot.end,
-            stride=stride,
         )
 
         focus_points = focus_tracker.track_focus(
@@ -147,8 +141,6 @@ def process_video(
         output_path=focus_export_path
     )
 
-    # Debug video is now saved in apply_crop() function
-
     # Calculate processing statistics
     processing_time = time.time() - start_time
     stats = {
@@ -169,19 +161,14 @@ def process_video(
 
 def main():
     """Command line interface for H2V converter."""
-    parser = argparse.ArgumentParser(
-        description='Convert horizontal videos to vertical with focus tracking',
-        formatter_class=argparse.RawDescriptionHelpFormatter    )
+    parser = argparse.ArgumentParser(description='Convert horizontal videos to vertical with focus tracking')
 
     parser.add_argument('--input', '-i', required=True, help='Input video file path')
     parser.add_argument('--output', '-o', required=True, help='Output video file path (JSON auto-generated as output.json)')
-    parser.add_argument('--stride', type=int, default=1, help='Frame sampling stride (default: 1, every frame)')
-    parser.add_argument('--smoothing', choices=['rolling', 'gaussian', 'kalman'], default='rolling',
-                        help='Smoothing method for focus points (default: rolling)')
+    parser.add_argument('--smoothing', choices=['rolling', 'gaussian', 'kalman'], default='rolling', help='Smoothing method for focus points (default: rolling)')
     parser.add_argument('--window', type=int, default=5, help='Smoothing window size (default: 5)')
     parser.add_argument('--verbose', '-v', action='store_true', help='Enable verbose output')
-    parser.add_argument('--debug', '-d', action='store_true',
-                        help='Enable debug mode with visual overlays (creates debug_<output_name>)')
+    parser.add_argument('--debug', '-d', action='store_true', help='Enable debug mode with visual overlays')
 
     args = parser.parse_args()
 
@@ -199,7 +186,6 @@ def main():
         stats = process_video(
             input_path=args.input,
             output_path=args.output,
-            stride=args.stride,
             smoothing_method=args.smoothing,
             smoothing_window=args.window,
             verbose=args.verbose,
