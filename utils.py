@@ -11,29 +11,6 @@ import ffmpeg
 import matplotlib.pyplot as plt
 
 
-def calculate_crop_window(focus_x: float, focus_y: float, frame_width: int, frame_height: int) -> tuple:
-    """
-    Calculate crop window coordinates for 9:16 aspect ratio.
-    DEPRECATED: Use utils.calculate_crop_coordinates() instead for new code.
-
-    Args:
-        focus_x, focus_y: Normalized focus coordinates (0-1)
-        frame_width, frame_height: Original frame dimensions
-
-    Returns:
-        (crop_x, crop_y, crop_width, crop_height) in pixels
-    """
-    # Use the new utility function and convert format
-    crop_x1, crop_y1, crop_x2, crop_y2 = calculate_crop_coordinates(
-        focus_x, focus_y, frame_height, frame_width
-    )
-
-    crop_x, crop_y = crop_x1, crop_y1
-    crop_width = crop_x2 - crop_x1
-    crop_height = crop_y2 - crop_y1
-
-    return crop_x, crop_y, crop_width, crop_height
-
 
 def closest_square_root(n):
     """returns the closes squared number to n that is larger than n if n is not a perfect square"""

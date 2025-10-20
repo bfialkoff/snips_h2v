@@ -22,7 +22,11 @@ def smooth_crop_transitions(focus_points: List[FocusPoint], frame_width: int, fr
     # Calculate raw crop windows
     raw_crops = []
     for fp in focus_points:
-        crop = utils.calculate_crop_window(fp.x, fp.y, frame_width, frame_height)
+        # Use the new utility function and convert format
+        crop_x1, crop_y1, crop_x2, crop_y2 = utils.calculate_crop_coordinates(
+            fp.x, fp.y, frame_height, frame_width
+        )
+        crop = (crop_x1, crop_y1, crop_x2 - crop_x1, crop_y2 - crop_y1)  # Convert to (x, y, width, height)
         raw_crops.append(crop)
 
     # Apply smoothing to crop positions
