@@ -1,42 +1,11 @@
 from typing import List
 import cv2
 import ffmpeg
-import numpy as np
 from focus_tracker import FocusPoint
+import utils
 
 
-def calculate_crop_window(focus_x: float, focus_y: float, frame_width: int, frame_height: int) -> tuple:
-    """
-    Calculate crop window coordinates for 9:16 aspect ratio.
 
-    Args:
-        focus_x, focus_y: Normalized focus coordinates (0-1)
-        frame_width, frame_height: Original frame dimensions
-
-    Returns:
-        (crop_x, crop_y, crop_width, crop_height) in pixels
-    """
-    target_aspect = 9 / 16  # width/height for vertical video
-
-    # Calculate target crop dimensions
-    if frame_width / frame_height > target_aspect:
-        # Frame is wider than target, crop width
-        crop_height = frame_height
-        crop_width = int(frame_height * target_aspect)
-    else:
-        # Frame is taller than target, crop height
-        crop_width = frame_width
-        crop_height = int(frame_width / target_aspect)
-
-    # Convert normalized focus to pixel coordinates
-    focus_x_px = focus_x * frame_width
-    focus_y_px = focus_y * frame_height
-
-    # Calculate crop position to center focus point
-    crop_x = max(0, min(int(focus_x_px - crop_width/2), frame_width - crop_width))
-    crop_y = max(0, min(int(focus_y_px - crop_height/2), frame_height - crop_height))
-
-    return crop_x, crop_y, crop_width, crop_height
 
 
 def smooth_crop_transitions(focus_points: List[FocusPoint], frame_width: int, frame_height: int, smoothing_window: int = 5) -> List[tuple]:
@@ -52,7 +21,7 @@ def smooth_crop_transitions(focus_points: List[FocusPoint], frame_width: int, fr
     # Calculate raw crop windows
     raw_crops = []
     for fp in focus_points:
-        crop = calculate_crop_window(fp.x, fp.y, frame_width, frame_height)
+        crop = utils.calculate_crop_window(fp.x, fp.y, frame_width, frame_height)
         raw_crops.append(crop)
 
     # Apply smoothing to crop positions
@@ -222,8 +191,7 @@ def apply_crop_opencv(
     input_path: str,
     output_path: str,
     focus_points: List[FocusPoint],
-    debug: bool = False,
-    debug_output_path: str = None
+    debug_collector: 'utils.DebugVideoCollector' = None
 ) -> str:
     """
     Apply dynamic cropping using OpenCV (alternative implementation).
@@ -232,8 +200,7 @@ def apply_crop_opencv(
         input_path: Path to input video
         output_path: Path to output video
         focus_points: List of focus points with timestamps
-        debug: Enable debug visualization
-        debug_output_path: Path for debug video output
+        debug_collector: Optional debug collector for frame accumulation
 
     Returns:
         Path to output video
@@ -258,10 +225,7 @@ def apply_crop_opencv(
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(output_path, fourcc, fps, (target_width, target_height))
 
-    # Set up debug video writer if needed
-    debug_out = None
-    if debug and debug_output_path:
-        debug_out = cv2.VideoWriter(debug_output_path, fourcc, fps, (frame_width, frame_height))
+    # Debug collection will be handled by debug_collector if provided
 
     frame_idx = 0
     while True:
@@ -276,11 +240,8 @@ def apply_crop_opencv(
             # Use last crop window if we run out of focus points
             crop_x, crop_y, crop_w, crop_h = crop_windows[-1] if crop_windows else (0, 0, frame_width, frame_height)
 
-        # Create debug frame if needed
-        if debug:
-            import utils
-            debug_frame = frame.copy()
-
+        # Add frame to debug collector if provided
+        if debug_collector:
             # Get focus point for this frame
             if frame_idx < len(focus_points):
                 fp = focus_points[frame_idx]
@@ -289,18 +250,17 @@ def apply_crop_opencv(
             else:
                 focus_x, focus_y, confidence = 0.5, 0.5, 0.0
 
-            # Add debug overlays
-            debug_frame = utils.add_debug_overlay(
-                debug_frame,
-                "Crop processing",
-                (focus_x, focus_y),
-                confidence,
-                None,  # No bbox in this context
-                (crop_x, crop_y, crop_w, crop_h)
+            # Add frame to debug collector with crop processing context
+            debug_collector.add_frame(
+                frame=frame,
+                shot_id=1,  # Will be updated by caller to provide proper shot context
+                total_shots=1,  # Will be updated by caller
+                detection_type="Crop processing",
+                focus_point=(focus_x, focus_y),
+                confidence=confidence,
+                bbox=None,
+                crop_coords=(crop_x, crop_y, crop_w, crop_h)
             )
-
-            if debug_out:
-                debug_out.write(debug_frame)
 
         # Apply crop
         cropped_frame = frame[crop_y:crop_y+crop_h, crop_x:crop_x+crop_w]
@@ -314,8 +274,6 @@ def apply_crop_opencv(
     cap.release()
     out.release()
 
-    if debug_out:
-        debug_out.release()
 
     return output_path
 
@@ -325,8 +283,7 @@ def apply_crop(
     output_path: str,
     focus_points: List[FocusPoint],
     use_ffmpeg: bool = True,
-    debug: bool = False,
-    debug_output_path: str = None
+    debug_collector: 'utils.DebugVideoCollector' = None
 ) -> str:
     """
     Apply dynamic crop to convert horizontal video to vertical.
@@ -336,13 +293,12 @@ def apply_crop(
         output_path: Path to output video
         focus_points: List of focus points for tracking
         use_ffmpeg: Whether to use FFmpeg (True) or OpenCV (False)
-        debug: Enable debug mode with visualization
-        debug_output_path: Path for debug video output
+        debug_collector: Optional debug collector for frame accumulation
 
     Returns:
         Path to output video
     """
-    if use_ffmpeg and not debug:
+    if use_ffmpeg and not debug_collector:
         return apply_crop_ffmpeg(input_path, output_path, focus_points)
     else:
         # Use OpenCV for debug mode or if explicitly requested
@@ -350,6 +306,5 @@ def apply_crop(
             input_path,
             output_path,
             focus_points,
-            debug=debug,
-            debug_output_path=debug_output_path
+            debug_collector=debug_collector
         )

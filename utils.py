@@ -1,25 +1,50 @@
-
-
+import time
 from typing import Iterator, Tuple, List, Optional, Union
+
 import cv2
 import numpy as np
 from scipy.ndimage import gaussian_filter1d
-import ffmpeg
+import matplotlib.pyplot as plt
+
+
+def calculate_crop_window(focus_x: float, focus_y: float, frame_width: int, frame_height: int) -> tuple:
+    """
+    Calculate crop window coordinates for 9:16 aspect ratio.
+    DEPRECATED: Use utils.calculate_crop_coordinates() instead for new code.
+
+    Args:
+        focus_x, focus_y: Normalized focus coordinates (0-1)
+        frame_width, frame_height: Original frame dimensions
+
+    Returns:
+        (crop_x, crop_y, crop_width, crop_height) in pixels
+    """
+    # Use the new utility function and convert format
+    crop_x1, crop_y1, crop_x2, crop_y2 = calculate_crop_coordinates(
+        focus_x, focus_y, frame_height, frame_width
+    )
+
+    crop_x, crop_y = crop_x1, crop_y1
+    crop_width = crop_x2 - crop_x1
+    crop_height = crop_y2 - crop_y1
+
+    return crop_x, crop_y, crop_width, crop_height
+
 
 def closest_square_root(n):
     """returns the closes squared number to n that is larger than n if n is not a perfect square"""
     next_n = (int(n ** 0.5) + 1) ** 2
-    is_perfect_square = int(n ** 0.5) == n **0.5
-    return int(n**0.5) if is_perfect_square else int(next_n ** 0.5)
+    is_perfect_square = int(n ** 0.5) == n ** 0.5
+    return int(n ** 0.5) if is_perfect_square else int(next_n ** 0.5)
 
 
 def load_frames(
-    video_path: str,
-    start_time: float = 0.0,
-    end_time: Optional[float] = None,
-    stride: int = 1,
-    resolution: Optional[Tuple[int, int]] = None,
-    max_frames: Optional[int] = None
+        video_path: str,
+        start_time: float = 0.0,
+        end_time: Optional[float] = None,
+        stride: int = 1,
+        resolution: Optional[Tuple[int, int]] = None,
+        max_frames: Optional[int] = None
 ) -> Iterator[Tuple[float, np.ndarray]]:
     """
     Load video frames as generator with configurable parameters.
@@ -131,7 +156,8 @@ def gaussian_smooth(points: List[Tuple[float, float]], sigma: float = 1.0) -> Li
     return list(zip(x_smooth.tolist(), y_smooth.tolist()))
 
 
-def kalman_smooth(points: List[Tuple[float, float]], process_noise: float = 0.01, measurement_noise: float = 0.1) -> List[Tuple[float, float]]:
+def kalman_smooth(points: List[Tuple[float, float]], process_noise: float = 0.01, measurement_noise: float = 0.1) -> \
+List[Tuple[float, float]]:
     """
     Apply Kalman filter smoothing to 2D points.
 
@@ -158,8 +184,8 @@ def kalman_smooth(points: List[Tuple[float, float]], process_noise: float = 0.01
 
         for i in range(1, n):
             # Predict
-            x_pred = x[i-1]
-            P_pred = P[i-1] + q
+            x_pred = x[i - 1]
+            P_pred = P[i - 1] + q
 
             # Update
             K = P_pred / (P_pred + r)  # Kalman gain
@@ -259,8 +285,50 @@ def denormalize_coordinates(x: float, y: float, width: int, height: int) -> Tupl
     return int(x * width), int(y * height)
 
 
+def calculate_crop_coordinates(
+        center_x: float,
+        center_y: float,
+        frame_height: int,
+        frame_width: int,
+        target_aspect_ratio: float = 9 / 16
+) -> Tuple[int, int, int, int]:
+    """
+    Calculate crop box coordinates given a center point and target aspect ratio.
+
+    Args:
+        center_x, center_y: Normalized center coordinates (0-1)
+        frame_height, frame_width: Frame dimensions in pixels
+        target_aspect_ratio: Target width/height ratio (default: 9/16 for vertical video)
+
+    Returns:
+        (x1, y1, x2, y2) crop coordinates in pixels
+    """
+    # Calculate target crop dimensions
+    if frame_width / frame_height > target_aspect_ratio:
+        # Frame is wider than target, crop width
+        crop_height = frame_height
+        crop_width = int(frame_height * target_aspect_ratio)
+    else:
+        # Frame is taller than target, crop height
+        crop_width = frame_width
+        crop_height = int(frame_width / target_aspect_ratio)
+
+    # Convert normalized focus to pixel coordinates
+    focus_x_px = center_x * frame_width
+    focus_y_px = center_y * frame_height
+
+    # Calculate crop position to center focus point
+    crop_x1 = max(0, min(int(focus_x_px - crop_width / 2), frame_width - crop_width))
+    crop_y1 = max(0, min(int(focus_y_px - crop_height / 2), frame_height - crop_height))
+    crop_x2 = crop_x1 + crop_width
+    crop_y2 = crop_y1 + crop_height
+
+    return crop_x1, crop_y1, crop_x2, crop_y2
+
+
 # Debug visualization functions
-def put_text(frame: np.ndarray, text: str, position: Tuple[int, int], color: Tuple[int, int, int] = (0, 255, 0)) -> np.ndarray:
+def put_text(frame: np.ndarray, text: str, position: Tuple[int, int],
+             color: Tuple[int, int, int] = (0, 255, 0)) -> np.ndarray:
     """
     Add text overlay to frame for debug visualization.
 
@@ -284,7 +352,8 @@ def put_text(frame: np.ndarray, text: str, position: Tuple[int, int], color: Tup
     return frame
 
 
-def draw_focus_circle(frame: np.ndarray, x: float, y: float, radius: int = 20, color: Tuple[int, int, int] = (0, 255, 255)) -> np.ndarray:
+def draw_focus_circle(frame: np.ndarray, x: float, y: float, radius: int = 20,
+                      color: Tuple[int, int, int] = (0, 255, 255)) -> np.ndarray:
     """
     Draw a circle at the focus point for debug visualization.
 
@@ -309,7 +378,8 @@ def draw_focus_circle(frame: np.ndarray, x: float, y: float, radius: int = 20, c
     return frame
 
 
-def draw_bbox(frame: np.ndarray, bbox: Tuple[float, float, float, float], color: Tuple[int, int, int] = (255, 0, 0), thickness: int = 2) -> np.ndarray:
+def draw_bbox(frame: np.ndarray, bbox: Tuple[float, float, float, float], color: Tuple[int, int, int] = (255, 0, 0),
+              thickness: int = 2) -> np.ndarray:
     """
     Draw bounding box for detected objects/faces.
 
@@ -327,7 +397,8 @@ def draw_bbox(frame: np.ndarray, bbox: Tuple[float, float, float, float], color:
     return frame
 
 
-def draw_crop_box(frame: np.ndarray, crop_coords: Tuple[int, int, int, int], color: Tuple[int, int, int] = (0, 0, 255), thickness: int = 3) -> np.ndarray:
+def draw_crop_box(frame: np.ndarray, crop_coords: Tuple[int, int, int, int], color: Tuple[int, int, int] = (0, 0, 255),
+                  thickness: int = 3) -> np.ndarray:
     """
     Draw the cropping rectangle that will be applied.
 
@@ -358,36 +429,65 @@ def draw_crop_box(frame: np.ndarray, crop_coords: Tuple[int, int, int, int], col
 
 
 def add_debug_overlay(
-    frame: np.ndarray,
-    detection_type: str,
-    focus_point: Tuple[float, float],
-    confidence: float,
-    bbox: Optional[Tuple[float, float, float, float]] = None,
-    crop_coords: Optional[Tuple[int, int, int, int]] = None
+        frame: np.ndarray,
+        detection_type: str,
+        focus_point: Tuple[float, float],
+        confidence: float,
+        bbox: Optional[Tuple[float, float, float, float]] = None,
+        crop_coords: Optional[Tuple[int, int, int, int]] = None,
+        shot_id: Optional[int] = None,
+        total_shots: Optional[int] = None,
+        global_frame_idx: Optional[int] = None
 ) -> np.ndarray:
     """
-    Add comprehensive debug overlay to frame.
+    Add comprehensive debug overlay to frame with shot and frame tracking.
 
     Args:
         frame: Input frame
-        detection_type: Type of detection ("Face detected", "Person detected", "No humans detected")
+        detection_type: Type of detection ("Face detected", "Person detected", etc.)
         focus_point: Normalized focus coordinates (x, y)
         confidence: Detection confidence (0-1)
         bbox: Optional bounding box for detected object
         crop_coords: Optional crop coordinates to visualize
+        shot_id: Current shot ID (1-based)
+        total_shots: Total number of shots
+        global_frame_idx: Global frame counter across all shots
+        detection_stats: Current detection statistics
 
     Returns:
-        Frame with debug overlays
+        Frame with comprehensive debug overlays
     """
     height, width = frame.shape[:2]
 
-    # Add detection status text
+    # Color code detection status
+    status_color = (0, 255, 0)  # Default green
+    if 'face' in detection_type.lower():
+        status_color = (0, 255, 0)  # Green
+    elif 'person' in detection_type.lower():
+        status_color = (255, 0, 0)  # Blue
+    elif 'motion' in detection_type.lower():
+        status_color = (0, 255, 255)  # Yellow
+    elif 'no humans' in detection_type.lower():
+        status_color = (0, 0, 255)  # Red
+
+    # Add detection status text with color coding
     status_text = f"{detection_type} (conf: {confidence:.2f})"
-    frame = put_text(frame, status_text, (10, 30), (0, 255, 0))
+    frame = put_text(frame, status_text, (10, 30), status_color)
+
+    # Add shot information if available
+    if shot_id is not None and total_shots is not None:
+        shot_text = f"Shot {shot_id}/{total_shots}"
+        frame = put_text(frame, shot_text, (10, 60), (255, 255, 255))
+
+    # Add global frame counter if available
+    if global_frame_idx is not None:
+        frame_text = f"Frame #{global_frame_idx}"
+        frame = put_text(frame, frame_text, (10, 90), (200, 200, 200))
 
     # Add focus coordinates
     focus_text = f"Focus: ({focus_point[0]:.3f}, {focus_point[1]:.3f})"
-    frame = put_text(frame, focus_text, (10, 60), (255, 255, 0))
+    y_pos = 120 if shot_id is not None else 60
+    frame = put_text(frame, focus_text, (10, y_pos), (255, 255, 0))
 
     # Draw focus circle
     frame = draw_focus_circle(frame, focus_point[0], focus_point[1])
@@ -400,7 +500,8 @@ def add_debug_overlay(
         bbox_width = bbox[2] - bbox[0]
         bbox_height = bbox[3] - bbox[1]
         bbox_text = f"BBox: {bbox_width:.0f}x{bbox_height:.0f}"
-        frame = put_text(frame, bbox_text, (10, 90), (255, 0, 255))
+        y_pos = 150 if shot_id is not None else 90
+        frame = put_text(frame, bbox_text, (10, y_pos), (255, 0, 255))
 
     # Draw crop rectangle if provided
     if crop_coords is not None:
@@ -408,16 +509,178 @@ def add_debug_overlay(
 
         # Add crop info
         crop_text = f"Crop: {crop_coords[2]}x{crop_coords[3]} at ({crop_coords[0]}, {crop_coords[1]})"
-        frame = put_text(frame, crop_text, (10, 120), (0, 0, 255))
+        y_pos = 180 if shot_id is not None else 120
+        frame = put_text(frame, crop_text, (10, y_pos), (0, 0, 255))
 
     # Add timestamp
-    import time
     timestamp = time.strftime("%H:%M:%S")
     frame = put_text(frame, f"Time: {timestamp}", (width - 150, 30), (255, 255, 255))
 
     return frame
 
-import matplotlib.pyplot as plt
+
+class DebugVideoCollector:
+    """
+    Centralized collector for debug frames to create a single continuous debug video.
+    """
+
+    def __init__(self, output_path: str):
+        self.output_path = output_path
+        self.frames = []
+        self.detection_stats = {
+            'face_detected': 0,
+            'person_detected': 0,
+            'motion_detected': 0,
+            'no_humans_detected': 0
+        }
+        self.global_frame_counter = 0
+
+    def add_frame(self,
+                  frame: np.ndarray,
+                  shot_id: int,
+                  total_shots: int,
+                  detection_type: str,
+                  focus_point: Tuple[float, float],
+                  confidence: float,
+                  bbox: Optional[Tuple[float, float, float, float]] = None,
+                  crop_coords: Optional[Tuple[int, int, int, int]] = None
+                  ) -> None:
+        """
+        Add a frame to the debug collection with comprehensive annotations.
+
+        Args:
+            frame: Input frame
+            shot_id: Current shot ID (1-based)
+            total_shots: Total number of shots
+            detection_type: Type of detection result
+            focus_point: Normalized focus coordinates
+            confidence: Detection confidence
+            bbox: Optional bounding box
+            crop_coords: Optional crop coordinates
+        """
+        self.global_frame_counter += 1
+
+        # Track detection statistics
+        detection_key = detection_type.lower().replace(' ', '_')
+        if detection_key in self.detection_stats:
+            self.detection_stats[detection_key] += 1
+
+        # Create debug frame with enhanced annotations
+        debug_frame = frame.copy()
+        debug_frame = add_debug_overlay(
+            debug_frame,
+            detection_type,
+            focus_point,
+            confidence,
+            bbox,
+            crop_coords,
+            shot_id=shot_id,
+            total_shots=total_shots,
+            global_frame_idx=self.global_frame_counter,
+            detection_stats=self.detection_stats
+        )
+
+        self.frames.append(debug_frame)
+
+    def save_video(self, fps: float = 30.0) -> str:
+        """
+        Save collected debug frames as a single continuous video.
+
+        Args:
+            fps: Frames per second for output video
+
+        Returns:
+            Path to saved debug video
+        """
+        if not self.frames:
+            print("⚠️ No debug frames to save")
+            return self.output_path
+
+        # Add final summary frame
+        self._add_summary_frame()
+
+        height, width = self.frames[0].shape[:2]
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+
+        try:
+            writer = cv2.VideoWriter(self.output_path, fourcc, fps, (width, height))
+
+            for frame in self.frames:
+                writer.write(frame)
+
+        finally:
+            writer.release()
+
+        print(f"🐛 Debug video saved: {self.output_path}")
+        print(f"📊 Total frames: {len(self.frames)}")
+        self._print_detection_summary()
+
+        return self.output_path
+
+    def _add_summary_frame(self):
+        """Add a summary frame with overall statistics at the end."""
+        if not self.frames:
+            return
+
+        # Create summary frame based on last frame
+        summary_frame = self.frames[-1].copy()
+
+        # Black overlay for text
+        overlay = summary_frame.copy()
+        cv2.rectangle(overlay, (0, 0), (summary_frame.shape[1], summary_frame.shape[0]), (0, 0, 0), -1)
+        summary_frame = cv2.addWeighted(summary_frame, 0.3, overlay, 0.7, 0)
+
+        # Add summary statistics
+        total_detections = sum(self.detection_stats.values())
+        y_pos = 100
+
+        put_text(summary_frame, "🎬 DEBUG VIDEO SUMMARY", (50, y_pos), (0, 255, 255))
+        y_pos += 60
+
+        put_text(summary_frame, f"Total Frames: {len(self.frames)}", (50, y_pos), (255, 255, 255))
+        y_pos += 40
+
+        if total_detections > 0:
+            for detection_type, count in self.detection_stats.items():
+                percentage = (count / total_detections) * 100
+                display_name = detection_type.replace('_', ' ').title()
+                text = f"{display_name}: {count} ({percentage:.1f}%)"
+
+                # Color code by detection type
+                color = (0, 255, 0)  # Default green
+                if 'face' in detection_type:
+                    color = (0, 255, 0)  # Green
+                elif 'person' in detection_type:
+                    color = (255, 0, 0)  # Blue
+                elif 'motion' in detection_type:
+                    color = (0, 255, 255)  # Yellow
+                elif 'no_humans' in detection_type:
+                    color = (0, 0, 255)  # Red
+
+                put_text(summary_frame, text, (50, y_pos), color)
+                y_pos += 40
+
+        # Add summary frame multiple times so it's visible for a few seconds
+        for _ in range(90):  # 3 seconds at 30fps
+            self.frames.append(summary_frame.copy())
+
+    def _print_detection_summary(self):
+        """Print detection statistics to console."""
+        total = sum(self.detection_stats.values())
+        if total == 0:
+            return
+
+        print("📈 Detection Summary:")
+        for detection_type, count in self.detection_stats.items():
+            percentage = (count / total) * 100
+            display_name = detection_type.replace('_', ' ').title()
+            print(f"  {display_name}: {count} ({percentage:.1f}%)")
+
+    def get_stats(self) -> dict:
+        """Get current detection statistics."""
+        return self.detection_stats.copy()
+
+
 def imshow(*img_args,  # Renamed from *img to avoid conflict with the inner variable _img
            cmap=None,
            show_colorbar: bool = False,
@@ -510,8 +773,6 @@ def imshow(*img_args,  # Renamed from *img to avoid conflict with the inner vari
     return fig, axs_list
 
 
-
-
 def put_text(
         img,
         text: str,
@@ -547,9 +808,6 @@ def put_text(
     cv2.putText(img, text, org, font, font_scale, color, thickness=thickness, lineType=line_type)
 
     return img
-
-
-import cv2
 
 
 def draw_box(
@@ -606,3 +864,42 @@ def draw_circle(
     # Colored circle on top
     cv2.circle(img, center, radius, color, thickness, line_type)
     return img
+
+
+if __name__ == '__main__':
+    from scipy.signal import convolve2d
+
+
+    def best_saliency_center_fast(saliency, crop_h, crop_w, mode):
+        kernel = np.ones((crop_h, crop_w), np.float32)
+        summed = convolve2d(saliency, kernel, mode=mode)
+        y, x = np.unravel_index(np.argmax(summed), summed.shape)
+        return (x, y), summed[y, x]
+
+
+    def fast_saliency(img):
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        gray = cv2.GaussianBlur(gray, (5, 5), 1)
+        gray = np.float32(gray)
+        dft = cv2.dft(gray, flags=cv2.DFT_COMPLEX_OUTPUT)
+        magnitude, phase = cv2.cartToPolar(dft[:, :, 0], dft[:, :, 1])
+        log_amplitude = np.log(magnitude + 1)
+        spectral_residual = log_amplitude - cv2.boxFilter(log_amplitude, -1, (3, 3))
+        exp_residual = np.exp(spectral_residual)
+        real, imag = cv2.polarToCart(exp_residual, phase)
+        dft_mod = cv2.merge([real, imag])
+        recon = cv2.idft(dft_mod)
+        saliency_map = cv2.magnitude(recon[:, :, 0], recon[:, :, 1])
+        # saliency_map = cv2.GaussianBlur(saliency_map, (5, 5), 1)
+        saliency_map = (saliency_map - saliency_map.min()) / (saliency_map.max() - saliency_map.min() + 1e-8)
+        return (saliency_map * 255).astype('uint8')
+
+
+    img = cv2.imread("/Users/bfialkoff/projects/snips_h2v/frames/frame_0158.png")
+    img = cv2.resize(img, (0, 0), fx=0.25, fy=0.25)
+    _, _, h, w = calculate_crop_coordinates(0, 0, *img.shape[:2])
+    sal_map = fast_saliency(img)
+    (cx, cy), score = best_saliency_center_fast(sal_map, h, w)
+    x1, y1, x2, y2 = calculate_crop_coordinates(cx, cy, h, w, 9 / 16)
+    d_img = draw_bbox(img, (x1, y1, x2, y2), )
+    imshow(d_img)

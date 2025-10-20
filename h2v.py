@@ -7,14 +7,12 @@ the main point of interest centered using automated focus tracking.
 """
 
 import argparse
-import subprocess
 import time
 import sys
 import os
 import shutil
 from pathlib import Path
 
-import cv2
 
 def handle_ffmpeg():
     ffmpeg_path = shutil.which('ffmpeg')
@@ -26,6 +24,7 @@ def handle_ffmpeg():
         os.environ['FFPROBE_BINARY'] = ffprobe_path
     return ffmpeg_path is not None and ffprobe_path is not None
 
+
 FFMPEG_AVAILABLE = handle_ffmpeg()
 
 import scene_detector
@@ -36,15 +35,14 @@ import utils
 
 
 def process_video(
-    input_path: str,
-    output_path: str,
-    focus_export_path: str = None,
-    stride: int = 2,
-    smoothing_method: str = 'rolling',
-    smoothing_window: int = 5,
-    verbose: bool = False,
-    debug: bool = False,
-    debug_output_path: str = None
+        input_path: str,
+        output_path: str,
+        focus_export_path: str = None,
+        stride: int = 2,
+        smoothing_method: str = 'rolling',
+        smoothing_window: int = 5,
+        verbose: bool = False,
+        debug: bool = False
 ) -> dict:
     """
     Main video processing pipeline.
@@ -58,7 +56,6 @@ def process_video(
         smoothing_window: Window size for smoothing
         verbose: Enable verbose logging
         debug: Enable debug mode with visual overlays
-        debug_output_path: Path to save debug video with overlays
 
     Returns:
         Dictionary with processing statistics
@@ -77,7 +74,6 @@ def process_video(
     if not utils.validate_video_file(input_path):
         raise ValueError(f"Invalid video file: {input_path}")
 
-
     # Step 1: Scene Detection
     if verbose:
         print("Detecting scenes...")
@@ -91,17 +87,23 @@ def process_video(
     smoothing_func = utils.create_smoothing_function(
         smoothing_method,
         window=smoothing_window,
-        sigma=smoothing_window/2.0,  # for gaussian
+        sigma=smoothing_window / 2.0,  # for gaussian
         process_noise=0.01,  # for kalman
-        measurement_noise=0.1   # for kalman
+        measurement_noise=0.1  # for kalman
     )
 
     all_focus_points = []
     shot_focus_points = []
 
+    # Create debug collector if debug mode is enabled
+    debug_collector = None
+    if debug:
+        debug_output_path = f"debug_{Path(output_path).name}"
+        debug_collector = utils.DebugVideoCollector(debug_output_path)
+
     for i, shot in enumerate(shots):
         if verbose:
-            print(f"Processing shot {i+1}/{len(shots)}: {shot.start:.2f}s - {shot.end:.2f}s")
+            print(f"Processing shot {i + 1}/{len(shots)}: {shot.start:.2f}s - {shot.end:.2f}s")
 
         # Load frames for this shot
         frames = utils.load_frames(
@@ -111,18 +113,13 @@ def process_video(
             stride=stride,
             resolution=None  # Keep original resolution for tracking
         )
-        # Track focus points
-        shot_debug_path = None
-        if debug and debug_output_path:
-            shot_debug_path = f"{debug_output_path}_shot_{i+1}.mp4"
 
         focus_points = focus_tracker.track_focus(
             frames=frames,
-            audio_stream=None,  # TODO: Add audio support
-            sample_rate=None,
             smoothing_func=smoothing_func,
-            debug=debug,
-            debug_output_path=shot_debug_path
+            debug_collector=debug_collector,
+            shot_id=i + 1,
+            total_shots=len(shots)
         )
 
         shot_focus_points.append(focus_points)
@@ -135,17 +132,12 @@ def process_video(
     if verbose:
         print("Applying dynamic cropping...")
 
-    crop_debug_path = None
-    if debug and debug_output_path:
-        crop_debug_path = f"{debug_output_path}_crop.mp4"
-
     cropped_video_path = crop_composer.apply_crop(
         input_path=input_path,
         output_path=output_path,
         focus_points=all_focus_points,
         use_ffmpeg=FFMPEG_AVAILABLE,
-        debug=debug,
-        debug_output_path=crop_debug_path
+        debug_collector=debug_collector
     )
 
     # Step 4: Export Focus Points
@@ -158,6 +150,12 @@ def process_video(
             shot_focus_points=shot_focus_points,
             output_path=focus_export_path
         )
+
+    # Save debug video if debug mode was enabled
+    if debug_collector:
+        if verbose:
+            print("Saving debug video...")
+        debug_collector.save_video()
 
     # Calculate processing statistics
     processing_time = time.time() - start_time
@@ -190,65 +188,17 @@ Examples:
         """
     )
 
-    parser.add_argument(
-        '--input', '-i',
-        required=True,
-        help='Input video file path'
-    )
-
-    parser.add_argument(
-        '--output', '-o',
-        required=True,
-        help='Output video file path'
-    )
-
-    parser.add_argument(
-        '--export', '-e',
-        help='Export focus points to JSON file'
-    )
-
-    parser.add_argument(
-        '--stride',
-        type=int,
-        default=1,
-        help='Frame sampling stride (default: 1, every frame)'
-    )
-
-    parser.add_argument(
-        '--smoothing',
-        choices=['rolling', 'gaussian', 'kalman'],
-        default='rolling',
-        help='Smoothing method for focus points (default: rolling)'
-    )
-
-    parser.add_argument(
-        '--window',
-        type=int,
-        default=5,
-        help='Smoothing window size (default: 5)'
-    )
-
-    parser.add_argument(
-        '--verbose', '-v',
-        action='store_true',
-        help='Enable verbose output'
-    )
-
-    parser.add_argument(
-        '--report',
-        help='Generate processing report (JSON file path)'
-    )
-
-    parser.add_argument(
-        '--debug', '-d',
-        action='store_true',
-        help='Enable debug mode with visual overlays'
-    )
-
-    parser.add_argument(
-        '--debug-output',
-        help='Path for debug video output (without extension)'
-    )
+    parser.add_argument('--input', '-i', required=True, help='Input video file path')
+    parser.add_argument('--output', '-o', required=True, help='Output video file path')
+    parser.add_argument('--export', '-e', help='Export focus points to JSON file')
+    parser.add_argument('--stride', type=int, default=1, help='Frame sampling stride (default: 1, every frame)')
+    parser.add_argument('--smoothing', choices=['rolling', 'gaussian', 'kalman'], default='rolling',
+                        help='Smoothing method for focus points (default: rolling)')
+    parser.add_argument('--window', type=int, default=5, help='Smoothing window size (default: 5)')
+    parser.add_argument('--verbose', '-v', action='store_true', help='Enable verbose output')
+    parser.add_argument('--report', help='Generate processing report (JSON file path)')
+    parser.add_argument('--debug', '-d', action='store_true',
+                        help='Enable debug mode with visual overlays (creates debug_<output_name>)')
 
     args = parser.parse_args()
 
@@ -271,8 +221,7 @@ Examples:
             smoothing_method=args.smoothing,
             smoothing_window=args.window,
             verbose=args.verbose,
-            debug=args.debug,
-            debug_output_path=args.debug_output
+            debug=args.debug
         )
 
         # Generate processing report if requested
@@ -300,8 +249,9 @@ Examples:
             print(f"📊 Focus data: {args.export}")
         if args.report:
             print(f"📋 Report: {args.report}")
-        if args.debug and args.debug_output:
-            print(f"🐛 Debug videos: {args.debug_output}_*.mp4")
+        if args.debug:
+            debug_path = f"debug_{Path(args.output).name}"
+            print(f"🐛 Debug video: {debug_path}")
 
     except Exception as e:
         print(f"Error during processing: {e}", file=sys.stderr)

@@ -3,6 +3,7 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 
+import utils
 
 class FocusPoint:
     def __init__(self, timestamp: float, x: float, y: float, z: float = 0.0):
@@ -33,14 +34,10 @@ class FocusTracker:
     def __init__(self):
         # Load YOLO model for person detection
         self.yolo_model = YOLO('yolov8n.pt')
-
-        # Load YOLO-face model for face detection
         self.yoloface_model = YOLO('yolov8n-face.pt')
 
         # Background subtractor for motion detection
-        self.bg_subtractor = cv2.createBackgroundSubtractorMOG2(
-            detectShadows=True
-        )
+        self.bg_subtractor = cv2.createBackgroundSubtractorMOG2(detectShadows=True)
 
     def detect_faces(self, frame: np.ndarray) -> List[Tuple[float, float, float, float, float]]:
         """Detect faces using YOLO. Returns list of (x1, y1, x2, y2, confidence)."""
@@ -96,6 +93,12 @@ class FocusTracker:
         Determine primary focus point in frame.
         Priority: faces > people > motion areas > center
         Returns normalized (x, y, confidence) coordinates, detection type, and optional bounding box.
+
+        NOTE: To get the final crop coordinates that would be applied based on the returned focus point:
+        # from utils import calculate_crop_coordinates
+        # height, width = frame.shape[:2]
+        # center_x, center_y, conf, detection_type, bbox = self.get_primary_focus(frame)
+        # crop_x1, crop_y1, crop_x2, crop_y2 = calculate_crop_coordinates(center_x, center_y, height, width)
         """
         height, width = frame.shape[:2]
 
@@ -146,85 +149,56 @@ class FocusTracker:
         return 0.5, 0.5, 0.0, "No humans detected", None
 
 
-def save_debug_video(frames: List[np.ndarray], output_path: str, fps: float = 30.0) -> None:
-    """
-    Save debug frames as video file.
-
-    Args:
-        frames: List of debug frames
-        output_path: Output video path
-        fps: Frames per second
-    """
-    if not frames:
-        return
-
-    height, width = frames[0].shape[:2]
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    writer = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
-
-    try:
-        for frame in frames:
-            writer.write(frame)
-    finally:
-        writer.release()
 
 
 def track_focus(
     frames: Iterator[Tuple[float, np.ndarray]],
-    audio_stream: Optional[bytes] = None,
-    sample_rate: Optional[int] = None,
     smoothing_func: Optional[Callable] = None,
-    debug: bool = False,
-    debug_output_path: Optional[str] = None
+    debug_collector: Optional['utils.DebugVideoCollector'] = None,
+    shot_id: int = 1,
+    total_shots: int = 1
 ) -> List[FocusPoint]:
     """
     Track focus points across frames.
 
     Args:
         frames: Iterator of (timestamp, frame) tuples
-        audio_stream: Optional audio data for active speaker detection
-        sample_rate: Audio sample rate
         smoothing_func: Function to smooth focus points
-        debug: Enable debug visualization
-        debug_output_path: Path to save debug video
+        debug_collector: Optional debug collector for frame accumulation
+        shot_id: Current shot ID (1-based)
+        total_shots: Total number of shots in video
 
     Returns:
         List of FocusPoint objects
     """
-    from crop_composer import calculate_crop_window
-    import utils
-
     tracker = FocusTracker()
     raw_points = []
     focus_points = []
-    debug_frames = []
 
     if smoothing_func is None:
         smoothing_func = default_smoothing_func
 
     # Process each frame
     for timestamp, frame in frames:
-        if debug:
+        if debug_collector:
             # Get detailed focus information
             x, y, confidence, detection_type, bbox = tracker.get_primary_focus(frame, debug=True)
 
             # Calculate crop window for visualization
             height, width = frame.shape[:2]
-            crop_coords = calculate_crop_window(x, y, width, height)
+            crop_coords = utils.calculate_crop_window(x, y, width, height)
 
-            # Create debug frame with overlays
-            debug_frame = frame.copy()
-            debug_frame = utils.add_debug_overlay(
-                debug_frame,
-                detection_type,
-                (x, y),
-                confidence,
-                bbox,
-                crop_coords
+            # Add frame to debug collector
+            debug_collector.add_frame(
+                frame=frame,
+                shot_id=shot_id,
+                total_shots=total_shots,
+                detection_type=detection_type,
+                focus_point=(x, y),
+                confidence=confidence,
+                bbox=bbox,
+                crop_coords=crop_coords
             )
-
-            if debug_output_path:
-                debug_frames.append(debug_frame)
         else:
             # Standard processing
             result = tracker.get_primary_focus(frame, debug=False)
@@ -232,10 +206,6 @@ def track_focus(
 
         raw_points.append((x, y))
         focus_points.append(FocusPoint(timestamp, x, y, confidence))
-
-    # Save debug video if requested
-    if debug and debug_output_path and debug_frames:
-        save_debug_video(debug_frames, debug_output_path)
 
     # Apply smoothing to coordinates
     if len(raw_points) > 1:
