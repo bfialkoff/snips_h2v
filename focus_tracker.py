@@ -156,41 +156,62 @@ def track_focus(
     tracker = FocusTracker()
     raw_points = []
     focus_points = []
-    # Process each frame
+    # Step 1: Process all frames and collect raw focus points
+    frame_data = []  # Store (timestamp, frame, detection_info) for debug processing
+
     for timestamp, frame in frames:
-        if debug_collector:
-            # Get detailed focus information
-            x, y, confidence, detection_type, bbox = tracker.get_primary_focus(frame)
-
-            # Calculate crop coordinates for visualization
-            height, width = frame.shape[:2]
-            crop_coords = utils.calculate_crop_coordinates(x, y, height, width)
-
-            # Add frame to debug collector
-            debug_collector.add_frame(
-                frame=frame,
-                shot_id=shot_id,
-                total_shots=total_shots,
-                detection_type=detection_type,
-                focus_point=(x, y),
-                confidence=confidence,
-                bbox=bbox,
-                crop_coords=crop_coords
-            )
-        else:
-            # Standard processing
-            result = tracker.get_primary_focus(frame)
-            x, y, confidence = result[0], result[1], result[2]
+        result = tracker.get_primary_focus(frame)
+        x, y, confidence = result[0], result[1], result[2]
 
         raw_points.append((x, y))
         focus_points.append(FocusPoint(timestamp, x, y, confidence))
 
-    # Apply smoothing to coordinates
+        # Store frame data for debug processing after smoothing
+        if debug_collector:
+            detection_type = result[3] if len(result) > 3 else "Unknown"
+            bbox = result[4] if len(result) > 4 else None
+            frame_data.append((timestamp, frame, x, y, confidence, detection_type, bbox))
+
+    # Step 2: Apply smoothing to coordinates
     if len(raw_points) > 1:
         smoothed_coords = smoothing_func(raw_points)
         for i, (x, y) in enumerate(smoothed_coords):
             if i < len(focus_points):
                 focus_points[i].x = x
                 focus_points[i].y = y
+
+    # Step 3: Generate debug frames using smoothed coordinates and proper crop calculation
+    if debug_collector and frame_data:
+        from crop_composer import smooth_crop_transitions
+
+        # Get video properties from first frame
+        height, width = frame_data[0][1].shape[:2]
+
+        # Calculate smoothed crop windows (same as actual cropping)
+        crop_windows = smooth_crop_transitions(focus_points, width, height)
+
+        # Add debug frames with proper crop coordinates
+        for i, (timestamp, frame, raw_x, raw_y, confidence, detection_type, bbox) in enumerate(frame_data):
+            # Use smoothed focus point for display
+            smoothed_fp = focus_points[i]
+
+            # Get corresponding crop window
+            if i < len(crop_windows):
+                crop_x, crop_y, crop_w, crop_h = crop_windows[i]
+                crop_coords = (crop_x, crop_y, crop_x + crop_w, crop_y + crop_h)
+            else:
+                # Fallback to basic calculation
+                crop_coords = utils.calculate_crop_coordinates(smoothed_fp.x, smoothed_fp.y, height, width)
+
+            debug_collector.add_frame(
+                frame=frame,
+                shot_id=shot_id,
+                total_shots=total_shots,
+                detection_type=detection_type,
+                focus_point=(smoothed_fp.x, smoothed_fp.y),
+                confidence=confidence,
+                bbox=bbox,
+                crop_coords=crop_coords
+            )
 
     return focus_points

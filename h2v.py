@@ -14,19 +14,6 @@ import shutil
 from pathlib import Path
 
 
-def handle_ffmpeg():
-    ffmpeg_path = shutil.which('ffmpeg')
-    ffprobe_path = shutil.which('ffprobe')
-
-    if ffmpeg_path:
-        os.environ['FFMPEG_BINARY'] = ffmpeg_path
-    if ffprobe_path:
-        os.environ['FFPROBE_BINARY'] = ffprobe_path
-    return ffmpeg_path is not None and ffprobe_path is not None
-
-
-FFMPEG_AVAILABLE = handle_ffmpeg()
-
 import scene_detector
 import focus_tracker
 import crop_composer
@@ -37,7 +24,6 @@ import utils
 def process_video(
         input_path: str,
         output_path: str,
-        focus_export_path: str = None,
         stride: int = 2,
         smoothing_method: str = 'rolling',
         smoothing_window: int = 5,
@@ -49,8 +35,7 @@ def process_video(
 
     Args:
         input_path: Path to input video file
-        output_path: Path to output video file
-        focus_export_path: Path to export focus points JSON
+        output_path: Path to output video file (JSON will be auto-generated as output_path + '.json')
         stride: Frame sampling stride (1=every frame, 2=every other frame)
         smoothing_method: Smoothing method ('rolling', 'gaussian', 'kalman')
         smoothing_window: Window size for smoothing
@@ -64,11 +49,6 @@ def process_video(
 
     if verbose:
         print(f"Starting H2V conversion of {input_path}")
-        print(f"FFmpeg available: {FFMPEG_AVAILABLE}")
-        if FFMPEG_AVAILABLE:
-            print(f"Using FFmpeg for processing with audio preservation")
-        else:
-            print(f"Using OpenCV for processing (no audio preservation)")
 
     # Validate input file
     if not utils.validate_video_file(input_path):
@@ -98,7 +78,10 @@ def process_video(
     # Create debug collector if debug mode is enabled
     debug_collector = None
     if debug:
-        debug_output_path = f"debug_{Path(output_path).name}"
+        # Put debug video in same directory as main output
+        output_dir = Path(output_path).parent
+        debug_filename = f"debug_{Path(output_path).name}"
+        debug_output_path = str(output_dir / debug_filename)
         debug_collector = utils.DebugVideoCollector(debug_output_path, input_path)
 
         # Calculate total expected frames for proper progress tracking
@@ -150,20 +133,19 @@ def process_video(
         input_path=input_path,
         output_path=output_path,
         focus_points=all_focus_points,
-        use_ffmpeg=FFMPEG_AVAILABLE,
         debug_collector=debug_collector
     )
 
-    # Step 4: Export Focus Points
-    if focus_export_path:
-        if verbose:
-            print(f"Exporting focus points to {focus_export_path}")
+    # Step 4: Export Focus Points (auto-generate JSON path)
+    focus_export_path = output_path.replace('.mp4', '.json')
+    if verbose:
+        print(f"Exporting focus points to {focus_export_path}")
 
-        exporter.save_shots_with_focus(
-            shots=shots,
-            shot_focus_points=shot_focus_points,
-            output_path=focus_export_path
-        )
+    exporter.save_shots_with_focus(
+        shots=shots,
+        shot_focus_points=shot_focus_points,
+        output_path=focus_export_path
+    )
 
     # Save debug video if debug mode was enabled
     if debug_collector:
@@ -193,24 +175,15 @@ def main():
     """Command line interface for H2V converter."""
     parser = argparse.ArgumentParser(
         description='Convert horizontal videos to vertical with focus tracking',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  python h2v.py --input video.mp4 --output vertical.mp4 --export focus.json
-  python h2v.py -i input.mp4 -o output.mp4 --stride 4 --smoothing gaussian
-  python h2v.py -i input.mp4 -o output.mp4 --debug --verbose
-        """
-    )
+        formatter_class=argparse.RawDescriptionHelpFormatter    )
 
     parser.add_argument('--input', '-i', required=True, help='Input video file path')
-    parser.add_argument('--output', '-o', required=True, help='Output video file path')
-    parser.add_argument('--export', '-e', help='Export focus points to JSON file')
+    parser.add_argument('--output', '-o', required=True, help='Output video file path (JSON auto-generated as output.json)')
     parser.add_argument('--stride', type=int, default=1, help='Frame sampling stride (default: 1, every frame)')
     parser.add_argument('--smoothing', choices=['rolling', 'gaussian', 'kalman'], default='rolling',
                         help='Smoothing method for focus points (default: rolling)')
     parser.add_argument('--window', type=int, default=5, help='Smoothing window size (default: 5)')
     parser.add_argument('--verbose', '-v', action='store_true', help='Enable verbose output')
-    parser.add_argument('--report', help='Generate processing report (JSON file path)')
     parser.add_argument('--debug', '-d', action='store_true',
                         help='Enable debug mode with visual overlays (creates debug_<output_name>)')
 
@@ -230,7 +203,6 @@ Examples:
         stats = process_video(
             input_path=args.input,
             output_path=args.output,
-            focus_export_path=args.export,
             stride=args.stride,
             smoothing_method=args.smoothing,
             smoothing_window=args.window,
@@ -239,33 +211,12 @@ Examples:
         )
 
         # Generate processing report if requested
-        if args.report:
-            shots = scene_detector.detect_scenes(args.input)
-
-            # Load focus points for report
-            if args.export and Path(args.export).exists():
-                focus_points = exporter.load_focus_json(args.export)
-            else:
-                focus_points = []
-
-            exporter.create_processing_report(
-                input_path=args.input,
-                output_path=args.output,
-                shots=shots,
-                focus_points=focus_points,
-                processing_time=stats['processing_time'],
-                report_path=args.report
-            )
-
-        print(f"✅ Conversion completed successfully!")
-        print(f"📹 Output: {args.output}")
-        if args.export:
-            print(f"📊 Focus data: {args.export}")
-        if args.report:
-            print(f"📋 Report: {args.report}")
+        print(f"Conversion completed successfully!")
+        print(f"Output: {args.output}")
+        print(f"Focus data: {args.output}.json")
         if args.debug:
             debug_path = f"debug_{Path(args.output).name}"
-            print(f"🐛 Debug video: {debug_path}")
+            print(f"Debug video: {debug_path}")
 
     except Exception as e:
         print(f"Error during processing: {e}", file=sys.stderr)

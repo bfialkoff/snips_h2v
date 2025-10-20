@@ -1,3 +1,4 @@
+import os
 from typing import List
 import cv2
 import ffmpeg
@@ -66,7 +67,12 @@ def apply_crop_ffmpeg(input_path: str, output_path: str, focus_points: List[Focu
 
     frame_width = int(video_stream['width'])
     frame_height = int(video_stream['height'])
-    fps = eval(video_stream['r_frame_rate'])  # Convert "30/1" to 30.0
+    rate_str = video_stream['r_frame_rate']
+    try:
+        numerator, denominator = map(int, rate_str.split('/'))
+        fps = numerator / denominator
+    except (ValueError, ZeroDivisionError):
+        fps = 30.0  # or some sensible default / error handling
 
     # Calculate smoothed crop windows
     crop_windows = smooth_crop_transitions(focus_points, frame_width, frame_height)
@@ -180,27 +186,25 @@ def apply_crop_ffmpeg_with_dynamic_cropping(
 
     finally:
         # Clean up temporary file
-        import os
-        if os.path.exists(temp_video_path):
+         if os.path.exists(temp_video_path):
             os.unlink(temp_video_path)
 
     return output_path
 
 
-def apply_crop_opencv(
+def apply_crop_opencv_no_debug(
     input_path: str,
     output_path: str,
-    focus_points: List[FocusPoint],
-    debug_collector: 'utils.DebugVideoCollector' = None
+    focus_points: List[FocusPoint]
 ) -> str:
     """
-    Apply dynamic cropping using OpenCV (alternative implementation).
+    Apply dynamic cropping using OpenCV without debug collection.
+    Debug is now handled separately in collect_debug_frames().
 
     Args:
         input_path: Path to input video
         output_path: Path to output video
         focus_points: List of focus points with timestamps
-        debug_collector: Optional debug collector for frame accumulation
 
     Returns:
         Path to output video
@@ -225,8 +229,6 @@ def apply_crop_opencv(
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(output_path, fourcc, fps, (target_width, target_height))
 
-    # Debug collection will be handled by debug_collector if provided
-
     frame_idx = 0
     while True:
         ret, frame = cap.read()
@@ -239,30 +241,6 @@ def apply_crop_opencv(
         else:
             # Use last crop window if we run out of focus points
             crop_x, crop_y, crop_w, crop_h = crop_windows[-1] if crop_windows else (0, 0, frame_width, frame_height)
-
-        # Add frame to debug collector if provided
-        if debug_collector:
-            # Get focus point for this frame
-            if frame_idx < len(focus_points):
-                fp = focus_points[frame_idx]
-                focus_x, focus_y = fp.x, fp.y
-                confidence = fp.z
-            else:
-                focus_x, focus_y, confidence = 0.5, 0.5, 0.0
-
-            # Add frame to debug collector with crop processing context
-            # Convert (x, y, w, h) to (x1, y1, x2, y2) format for debug display
-            crop_coords_debug = (crop_x, crop_y, crop_x + crop_w, crop_y + crop_h)
-            debug_collector.add_frame(
-                frame=frame,
-                shot_id=1,  # Will be updated by caller to provide proper shot context
-                total_shots=1,  # Will be updated by caller
-                detection_type="Crop processing",
-                focus_point=(focus_x, focus_y),
-                confidence=confidence,
-                bbox=None,
-                crop_coords=crop_coords_debug
-            )
 
         # Apply crop
         cropped_frame = frame[crop_y:crop_y+crop_h, crop_x:crop_x+crop_w]
@@ -277,7 +255,69 @@ def apply_crop_opencv(
     out.release()
 
 
-    return output_path
+def collect_debug_frames(
+    input_path: str,
+    focus_points: List[FocusPoint],
+    debug_collector: 'utils.DebugVideoCollector'
+) -> None:
+    """
+    Collect debug frames independently of cropping method.
+    This ensures debug collection works the same regardless of FFmpeg vs OpenCV cropping.
+
+    Args:
+        input_path: Path to input video
+        focus_points: List of focus points with timestamps
+        debug_collector: Debug collector for frame accumulation
+    """
+    cap = cv2.VideoCapture(input_path)
+    if not cap.isOpened():
+        raise ValueError(f"Could not open video: {input_path}")
+
+    # Get video properties
+    frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    # Calculate crop windows (same logic as actual cropping)
+    crop_windows = smooth_crop_transitions(focus_points, frame_width, frame_height)
+
+    frame_idx = 0
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        # Get crop window for this frame (identical to cropping logic)
+        if frame_idx < len(crop_windows):
+            crop_x, crop_y, crop_w, crop_h = crop_windows[frame_idx]
+        else:
+            crop_x, crop_y, crop_w, crop_h = crop_windows[-1] if crop_windows else (0, 0, frame_width, frame_height)
+
+        # Get focus point for this frame
+        if frame_idx < len(focus_points):
+            fp = focus_points[frame_idx]
+            focus_x, focus_y = fp.x, fp.y
+            confidence = fp.z
+        else:
+            focus_x, focus_y, confidence = 0.5, 0.5, 0.0
+
+        # Convert (x, y, w, h) to (x1, y1, x2, y2) format for debug display
+        crop_coords_debug = (crop_x, crop_y, crop_x + crop_w, crop_y + crop_h)
+
+        # Add frame to debug collector
+        debug_collector.add_frame(
+            frame=frame,
+            shot_id=1,  # Will be updated by caller to provide proper shot context
+            total_shots=1,  # Will be updated by caller
+            detection_type="Crop processing",
+            focus_point=(focus_x, focus_y),
+            confidence=confidence,
+            bbox=None,
+            crop_coords=crop_coords_debug
+        )
+
+        frame_idx += 1
+
+    cap.release()
 
 
 def apply_crop(
@@ -290,6 +330,9 @@ def apply_crop(
     """
     Apply dynamic crop to convert horizontal video to vertical.
 
+    This function handles debug collection holistically - debug frames are collected
+    independently of the cropping method (FFmpeg vs OpenCV) to ensure consistency.
+
     Args:
         input_path: Path to input video
         output_path: Path to output video
@@ -300,15 +343,11 @@ def apply_crop(
     Returns:
         Path to output video
     """
+    # Debug collection is now handled in focus_tracker.py to avoid duplicates
+
+    # Step 2: Perform the actual cropping (without debug overhead)
     if use_ffmpeg:
-        # Always use FFmpeg when available for audio preservation
-        # Debug collector will be handled separately if provided
         return apply_crop_ffmpeg(input_path, output_path, focus_points)
     else:
-        # Fallback to OpenCV when FFmpeg not available
-        return apply_crop_opencv(
-            input_path,
-            output_path,
-            focus_points,
-            debug_collector=debug_collector
-        )
+        # Use OpenCV without debug collection (already handled above)
+        return apply_crop_opencv_no_debug(input_path, output_path, focus_points)
