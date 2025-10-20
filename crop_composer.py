@@ -139,8 +139,6 @@ def apply_crop(
     Returns:
         Path to output video
     """
-    import tempfile
-    import cv2
 
     # Step 1: Process all frames with OpenCV
     cap = cv2.VideoCapture(input_path)
@@ -260,7 +258,6 @@ def apply_crop(
 
     finally:
         # Clean up temporary file
-        import os
         if os.path.exists(temp_video_path):
             os.unlink(temp_video_path)
 
