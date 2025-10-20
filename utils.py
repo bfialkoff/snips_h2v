@@ -43,8 +43,6 @@ def load_frames(
         start_time: float = 0.0,
         end_time: Optional[float] = None,
         stride: int = 1,
-        resolution: Optional[Tuple[int, int]] = None,
-        max_frames: Optional[int] = None
 ) -> Iterator[Tuple[float, np.ndarray]]:
     """
     Load video frames as generator with configurable parameters.
@@ -54,8 +52,6 @@ def load_frames(
         start_time: Start time in seconds
         end_time: End time in seconds (None for full video)
         stride: Frame sampling stride (1 = every frame, 2 = every other frame)
-        resolution: Target resolution as (width, height), None to keep original
-        max_frames: Maximum number of frames to load
 
     Yields:
         Tuple of (timestamp, frame) where timestamp is in seconds
@@ -80,9 +76,6 @@ def load_frames(
 
     try:
         while current_frame < end_frame:
-            if max_frames and frame_count >= max_frames:
-                break
-
             ret, frame = cap.read()
             if not ret:
                 break
@@ -90,10 +83,6 @@ def load_frames(
             # Skip frames according to stride
             if (current_frame - start_frame) % stride == 0:
                 timestamp = current_frame / fps
-
-                # Resize if resolution specified
-                if resolution:
-                    frame = cv2.resize(frame, resolution)
 
                 yield timestamp, frame
                 frame_count += 1

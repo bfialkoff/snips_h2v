@@ -88,17 +88,11 @@ class FocusTracker:
 
         return motion_areas
 
-    def get_primary_focus(self, frame: np.ndarray, debug: bool = False) -> Tuple[float, float, float, str, Optional[Tuple[float, float, float, float]]]:
+    def get_primary_focus(self, frame: np.ndarray) -> Tuple[float, float, float, str, Optional[Tuple[float, float, float, float]]]:
         """
         Determine primary focus point in frame.
         Priority: faces > people > motion areas > center
         Returns normalized (x, y, confidence) coordinates, detection type, and optional bounding box.
-
-        NOTE: To get the final crop coordinates that would be applied based on the returned focus point:
-        # from utils import calculate_crop_coordinates
-        # height, width = frame.shape[:2]
-        # center_x, center_y, conf, detection_type, bbox = self.get_primary_focus(frame)
-        # crop_x1, crop_y1, crop_x2, crop_y2 = calculate_crop_coordinates(center_x, center_y, height, width)
         """
         height, width = frame.shape[:2]
 
@@ -110,10 +104,7 @@ class FocusTracker:
             x1, y1, x2, y2, conf = best_face
             center_x = ((x1 + x2) / 2) / width
             center_y = ((y1 + y2) / 2) / height
-
-            if debug:
-                return center_x, center_y, conf, "Face detected", (x1, y1, x2, y2)
-            return center_x, center_y, conf, "Face detected", None
+            return center_x, center_y, conf, "Face detected", (x1, y1, x2, y2)
 
         # Try person detection
         people = self.detect_people(frame)
@@ -124,9 +115,7 @@ class FocusTracker:
             center_x = ((x1 + x2) / 2) / width
             center_y = ((y1 + y2) / 2) / height
 
-            if debug:
-                return center_x, center_y, conf, "Person detected", (x1, y1, x2, y2)
-            return center_x, center_y, conf, "Person detected", None
+            return center_x, center_y, conf, "Person detected", (x1, y1, x2, y2)
 
         # Try motion detection
         motion_areas = self.detect_motion_areas(frame)
@@ -138,14 +127,7 @@ class FocusTracker:
             center_y = (y + h/2) / height
             confidence = min(1.0, (w * h) / (width * height * 0.05))
 
-            if debug:
-                # Convert x,y,w,h to x1,y1,x2,y2 format for consistency
-                return center_x, center_y, confidence, "Motion detected", (x, y, x + w, y + h)
-            return center_x, center_y, confidence, "Motion detected", None
-
-        # Default to center with low confidence
-        if debug:
-            return 0.5, 0.5, 0.0, "No humans detected", None
+            return center_x, center_y, confidence, "Motion detected", (x, y, x + w, y + h)
         return 0.5, 0.5, 0.0, "No humans detected", None
 
 
@@ -153,7 +135,7 @@ class FocusTracker:
 
 def track_focus(
     frames: Iterator[Tuple[float, np.ndarray]],
-    smoothing_func: Optional[Callable] = None,
+    smoothing_func: Optional[Callable] = default_smoothing_func,
     debug_collector: Optional['utils.DebugVideoCollector'] = None,
     shot_id: int = 1,
     total_shots: int = 1
@@ -174,15 +156,11 @@ def track_focus(
     tracker = FocusTracker()
     raw_points = []
     focus_points = []
-
-    if smoothing_func is None:
-        smoothing_func = default_smoothing_func
-
     # Process each frame
     for timestamp, frame in frames:
         if debug_collector:
             # Get detailed focus information
-            x, y, confidence, detection_type, bbox = tracker.get_primary_focus(frame, debug=True)
+            x, y, confidence, detection_type, bbox = tracker.get_primary_focus(frame)
 
             # Calculate crop coordinates for visualization
             height, width = frame.shape[:2]
@@ -201,7 +179,7 @@ def track_focus(
             )
         else:
             # Standard processing
-            result = tracker.get_primary_focus(frame, debug=False)
+            result = tracker.get_primary_focus(frame)
             x, y, confidence = result[0], result[1], result[2]
 
         raw_points.append((x, y))

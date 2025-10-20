@@ -129,7 +129,6 @@ def process_video(
             start_time=shot.start,
             end_time=shot.end,
             stride=stride,
-            resolution=None  # Keep original resolution for tracking
         )
 
         focus_points = focus_tracker.track_focus(
@@ -145,12 +144,9 @@ def process_video(
 
     if verbose:
         print(f"Tracked {len(all_focus_points)} focus points total")
-
-    # Step 3: Apply Dynamic Cropping
-    if verbose:
         print("Applying dynamic cropping...")
 
-    cropped_video_path = crop_composer.apply_crop(
+    crop_composer.apply_crop(
         input_path=input_path,
         output_path=output_path,
         focus_points=all_focus_points,

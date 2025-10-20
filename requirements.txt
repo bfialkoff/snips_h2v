@@ -6,6 +6,5 @@ torchvision>=0.15.0
 ultralytics>=8.0.0
 ffmpeg-python>=0.2.0
 scipy>=1.10.0
-opencv-contrib-python
 # Note: The yolo-face.pt model file needs to be downloaded separately
 # and placed in the project directory for face detection to work.
