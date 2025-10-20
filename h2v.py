@@ -133,7 +133,6 @@ def process_video(
         input_path=input_path,
         output_path=output_path,
         focus_points=all_focus_points,
-        debug_collector=debug_collector
     )
 
     # Step 4: Export Focus Points (auto-generate JSON path)

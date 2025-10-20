@@ -822,32 +822,6 @@ def draw_bbox(frame: np.ndarray, bbox: Tuple[float, float, float, float], color:
     cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
     return frame
 
-def draw_focus_circle(frame: np.ndarray, x: float, y: float, radius: int = 20,
-                      color: Tuple[int, int, int] = (0, 255, 255)) -> np.ndarray:
-    """
-    Draw a circle at the focus point for debug visualization.
-
-    Args:
-        frame: Input frame
-        x, y: Normalized focus coordinates (0-1)
-        radius: Circle radius in pixels
-        color: BGR color tuple (default: yellow)
-
-    Returns:
-        Frame with focus circle
-    """
-    height, width = frame.shape[:2]
-    center_x = int(x * width)
-    center_y = int(y * height)
-
-    # Draw filled circle
-    cv2.circle(frame, (center_x, center_y), radius, color, -1)
-    # Draw border
-    cv2.circle(frame, (center_x, center_y), radius, (0, 0, 0), 2)
-
-    return frame
-
-
 def draw_circle(frame: np.ndarray, center: Tuple[int, int], radius: int = 20,
                 color: Tuple[int, int, int] = (0, 255, 255)) -> np.ndarray:
     """
