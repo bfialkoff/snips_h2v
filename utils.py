@@ -5,6 +5,7 @@ import cv2
 import numpy as np
 from scipy.ndimage import gaussian_filter1d
 import ffmpeg
+import matplotlib.pyplot as plt
 
 
 def calculate_crop_window(focus_x: float, focus_y: float, frame_width: int, frame_height: int) -> tuple:
@@ -316,107 +317,6 @@ def calculate_crop_coordinates(
     return crop_x1, crop_y1, crop_x2, crop_y2
 
 
-# Debug visualization functions
-def put_text(frame: np.ndarray, text: str, position: Tuple[int, int],
-             color: Tuple[int, int, int] = (0, 255, 0)) -> np.ndarray:
-    """
-    Add text overlay to frame for debug visualization.
-
-    Args:
-        frame: Input frame
-        text: Text to display
-        position: (x, y) position for text
-        color: BGR color tuple
-
-    Returns:
-        Frame with text overlay
-    """
-    font = cv2.FONT_HERSHEY_SIMPLEX
-    font_scale = 0.8
-    thickness = 2
-
-    # Add black outline for better readability
-    cv2.putText(frame, text, position, font, font_scale, (0, 0, 0), thickness + 2)
-    cv2.putText(frame, text, position, font, font_scale, color, thickness)
-
-    return frame
-
-
-def draw_focus_circle(frame: np.ndarray, x: float, y: float, radius: int = 20,
-                      color: Tuple[int, int, int] = (0, 255, 255)) -> np.ndarray:
-    """
-    Draw a circle at the focus point for debug visualization.
-
-    Args:
-        frame: Input frame
-        x, y: Normalized focus coordinates (0-1)
-        radius: Circle radius in pixels
-        color: BGR color tuple (default: yellow)
-
-    Returns:
-        Frame with focus circle
-    """
-    height, width = frame.shape[:2]
-    center_x = int(x * width)
-    center_y = int(y * height)
-
-    # Draw filled circle
-    cv2.circle(frame, (center_x, center_y), radius, color, -1)
-    # Draw border
-    cv2.circle(frame, (center_x, center_y), radius, (0, 0, 0), 2)
-
-    return frame
-
-
-def draw_bbox(frame: np.ndarray, bbox: Tuple[float, float, float, float], color: Tuple[int, int, int] = (255, 0, 0),
-              thickness: int = 2) -> np.ndarray:
-    """
-    Draw bounding box for detected objects/faces.
-
-    Args:
-        frame: Input frame
-        bbox: Bounding box as (x1, y1, x2, y2) in pixel coordinates
-        color: BGR color tuple (default: blue)
-        thickness: Line thickness
-
-    Returns:
-        Frame with bounding box
-    """
-    x1, y1, x2, y2 = map(int, bbox)
-    cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
-    return frame
-
-
-def draw_crop_box(frame: np.ndarray, crop_coords: Tuple[int, int, int, int], color: Tuple[int, int, int] = (0, 0, 255),
-                  thickness: int = 3) -> np.ndarray:
-    """
-    Draw the cropping rectangle that will be applied.
-
-    Args:
-        frame: Input frame
-        crop_coords: Crop coordinates as (x1, y1, x2, y2)
-        color: BGR color tuple (default: red)
-        thickness: Line thickness
-
-    Returns:
-        Frame with crop rectangle
-    """
-    x1, y1, x2, y2 = crop_coords
-    cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
-
-    # Add corner markers for better visibility
-    corner_size = 20
-    corners = [
-        (x1, y1), (x2, y1),  # Top corners
-        (x1, y2), (x2, y2)   # Bottom corners
-    ]
-
-    for corner_x, corner_y in corners:
-        cv2.line(frame, (corner_x - corner_size, corner_y), (corner_x + corner_size, corner_y), color, thickness)
-        cv2.line(frame, (corner_x, corner_y - corner_size), (corner_x, corner_y + corner_size), color, thickness)
-
-    return frame
-
 
 def add_debug_overlay(
         frame: np.ndarray,
@@ -484,6 +384,7 @@ def add_debug_overlay(
     frame = put_text(frame, focus_text, (10, y_pos), (255, 255, 0))
 
     # Draw focus circle
+    # frame = draw_circle(frame, denormalize_coordinates(focus_point[0], focus_point[1], height, width), 20)
     frame = draw_focus_circle(frame, focus_point[0], focus_point[1])
 
     # Draw bounding box if provided
@@ -499,7 +400,7 @@ def add_debug_overlay(
 
     # Draw crop rectangle if provided
     if crop_coords is not None:
-        frame = draw_crop_box(frame, crop_coords, (0, 0, 255))
+        frame = draw_bbox(frame, crop_coords, (0, 0, 255))
 
         # Add crop info - convert (x1,y1,x2,y2) to width,height
         crop_width = crop_coords[2] - crop_coords[0]  # x2 - x1
@@ -613,7 +514,7 @@ class DebugVideoCollector:
             Path to saved debug video
         """
         if self.global_frame_counter == 0:
-            print("⚠️ No debug frames to save")
+            print("No debug frames to save")
             return self.output_path
 
         try:
@@ -630,7 +531,7 @@ class DebugVideoCollector:
                         fps = float(fps_str)
                 else:
                     fps = 30.0  # Fallback
-                print(f"🎬 Using original video fps: {fps:.2f}")
+                print(f"Using original video fps: {fps:.2f}")
 
             # Step 2: Create summary frame and save it
             self._add_summary_frame()
@@ -638,7 +539,7 @@ class DebugVideoCollector:
             # Step 3: Create video from image sequence using FFmpeg
             temp_video_path = f"{self.output_path}_no_audio.mp4"
 
-            print(f"🎬 Creating debug video from {self.global_frame_counter} frames at {fps:.2f} fps...")
+            print(f"Creating debug video from {self.global_frame_counter} frames at {fps:.2f} fps...")
 
             (
                 ffmpeg
@@ -690,7 +591,7 @@ class DebugVideoCollector:
                             .run(quiet=True)
                         )
                     else:
-                        print(f"⚠️ Debug video is {duration_ratio:.1f}x longer than original - creating without audio to prevent confusion")
+                        print(f"Debug video is {duration_ratio:.1f}x longer than original - creating without audio to prevent confusion")
                         # Debug video too long, create without audio
                         import shutil
                         shutil.move(temp_video_path, self.output_path)
@@ -701,19 +602,19 @@ class DebugVideoCollector:
                     os.unlink(temp_video_path)
 
                 else:
-                    print("🔇 Original video has no audio, creating video-only debug file")
+                    print("Original video has no audio, creating video-only debug file")
                     # No audio, just rename the temp file
                     import shutil
                     shutil.move(temp_video_path, self.output_path)
 
             except ffmpeg.Error as e:
-                print(f"⚠️ FFmpeg audio processing failed: {e}")
-                print("📹 Falling back to video-only debug file")
+                print(f"FFmpeg audio processing failed: {e}")
+                print("Falling back to video-only debug file")
                 import shutil
                 shutil.move(temp_video_path, self.output_path)
 
         except ffmpeg.Error as e:
-            print(f"❌ FFmpeg video creation failed: {e}")
+            print(f"FFmpeg video creation failed: {e}")
             raise RuntimeError(f"Failed to create debug video: {e}")
 
         finally:
@@ -721,8 +622,8 @@ class DebugVideoCollector:
             import shutil
             shutil.rmtree(self.temp_dir)
 
-        print(f"🐛 Debug video saved: {self.output_path}")
-        print(f"📊 Total frames: {self.global_frame_counter}")
+        print(f"Debug video saved: {self.output_path}")
+        print(f"Total frames: {self.global_frame_counter}")
         self._print_detection_summary()
 
         return self.output_path
@@ -741,7 +642,7 @@ class DebugVideoCollector:
         total_detections = sum(self.detection_stats.values())
         y_pos = 100
 
-        put_text(summary_frame, "🎬 DEBUG VIDEO SUMMARY", (50, y_pos), (0, 255, 255))
+        put_text(summary_frame, "DEBUG VIDEO SUMMARY", (50, y_pos), (0, 255, 255))
         y_pos += 60
 
         put_text(summary_frame, f"Total Frames: {self.global_frame_counter}", (50, y_pos), (255, 255, 255))
@@ -783,7 +684,7 @@ class DebugVideoCollector:
         if total == 0:
             return
 
-        print("📈 Detection Summary:")
+        print("Detection Summary:")
         for detection_type, count in self.detection_stats.items():
             percentage = (count / total) * 100
             display_name = detection_type.replace('_', ' ').title()
@@ -886,69 +787,75 @@ def imshow(*img_args,  # Renamed from *img to avoid conflict with the inner vari
     return fig, axs_list
 
 
-def put_text(
-        img,
-        text: str,
-        org: tuple,
-        color=(255, 255, 255),
-        font=cv2.FONT_HERSHEY_SIMPLEX,
-        font_scale=1.0,
-        thickness=2,
-        outline_thickness=4,
-        line_type=cv2.LINE_AA
-):
+def put_text(frame: np.ndarray, text: str, position: Tuple[int, int],
+             color: Tuple[int, int, int] = (255, 255, 255)) -> np.ndarray:
     """
-    Draws text on an image with a black outline for better visibility.
+    Add text overlay to frame with black outline for better visibility.
 
     Args:
-        img: The image to draw on (numpy array).
-        text: The text string to write.
-        org: Bottom-left corner of the text (x, y).
-        color: Text color (B, G, R).
-        font: OpenCV font type.
-        font_scale: Scale of the text.
-        thickness: Thickness of the colored text.
-        outline_thickness: Thickness of the black outline.
-        line_type: Line type for OpenCV drawing.
+        frame: Input frame
+        text: Text to display
+        position: (x, y) position for text
+        color: BGR color tuple
 
     Returns:
-        Image with text drawn.
+        Frame with text overlay
     """
-    # Draw black outline (slightly thicker)
-    cv2.putText(img, text, org, font, font_scale, (0, 0, 0), thickness=outline_thickness, lineType=line_type)
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 0.8
+    thickness = 2
 
-    # Draw colored text on top (slightly smaller/thinner)
-    cv2.putText(img, text, org, font, font_scale, color, thickness=thickness, lineType=line_type)
+    # Add black outline for better readability
+    cv2.putText(frame, text, position, font, font_scale, (0, 0, 0), thickness + 2)
+    cv2.putText(frame, text, position, font, font_scale, color, thickness)
 
-    return img
+    return frame
 
 
-def draw_box(
-        img,
-        top_left: tuple,
-        bottom_right: tuple,
-        color=(0, 255, 0),
-        thickness=2,
-        outline_thickness=4,
-        line_type=cv2.LINE_AA
-):
+def draw_bbox(frame: np.ndarray, bbox: Tuple[float, float, float, float], color: Tuple[int, int, int] = (0, 255, 0),
+              thickness: int = 2) -> np.ndarray:
     """
-    Draw a rectangle with a black outline for better visibility.
+    Draw bounding box with black outline for better visibility.
 
     Args:
-        img: Image to draw on (numpy array).
-        top_left: (x, y) of the top-left corner.
-        bottom_right: (x, y) of the bottom-right corner.
-        color: Rectangle color (B, G, R).
-        thickness: Thickness of colored rectangle.
-        outline_thickness: Thickness of black outline rectangle.
-        line_type: OpenCV line type.
+        frame: Input frame
+        bbox: Bounding box as (x1, y1, x2, y2) in pixel coordinates
+        color: BGR color tuple (default: green)
+        thickness: Line thickness
+
+    Returns:
+        Frame with bounding box
     """
-    # Black outline
-    cv2.rectangle(img, top_left, bottom_right, (0, 0, 0), outline_thickness, line_type)
-    # Colored rectangle on top
-    cv2.rectangle(img, top_left, bottom_right, color, thickness, line_type)
-    return img
+    x1, y1, x2, y2 = map(int, bbox)
+    # Black outline for better visibility
+    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 0), thickness + 2)
+    cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
+    return frame
+
+def draw_focus_circle(frame: np.ndarray, x: float, y: float, radius: int = 20,
+                      color: Tuple[int, int, int] = (0, 255, 255)) -> np.ndarray:
+    """
+    Draw a circle at the focus point for debug visualization.
+
+    Args:
+        frame: Input frame
+        x, y: Normalized focus coordinates (0-1)
+        radius: Circle radius in pixels
+        color: BGR color tuple (default: yellow)
+
+    Returns:
+        Frame with focus circle
+    """
+    height, width = frame.shape[:2]
+    center_x = int(x * width)
+    center_y = int(y * height)
+
+    # Draw filled circle
+    cv2.circle(frame, (center_x, center_y), radius, color, -1)
+    # Draw border
+    cv2.circle(frame, (center_x, center_y), radius, (0, 0, 0), 2)
+
+    return frame
 
 
 def draw_circle(

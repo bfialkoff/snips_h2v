@@ -91,14 +91,7 @@ def track_focus(
 ]
 ```
 
-### 2.5 Utilities (Debug & Helper Functions)
-
-* `put_text(frame, text, position)`: draws debug text on frames
-* `draw_focus_circle(frame, x, y)`: draws circle at focus point
-* `draw_bbox(frame, bbox)`: draws bounding box for detection
-* `draw_crop_box(frame, crop_box)`: draws cropping rectangle for reference
-
-### 2.6 Cloud Deployment (Bonus)
+### 2.5 Cloud Deployment (Bonus)
 
 * Optional API-based service (AWS/GCP)
 * POST `/process` with video file, returns processed video + focus JSON
@@ -163,7 +156,7 @@ python h2v.py --input input.mp4 --output output.mp4 --export focus.json --debug
 3. Implement basic `focus_tracker.track_focus` with debug mode support (placeholder tracking, draw debug info).
 4. Integrate `crop_composer.apply_crop` preserving audio and draw debug boxes if debug mode is on.
 5. Implement `exporter.save_focus_json`.
-6. Implement `utils` drawing/debug functions (`put_text`, `draw_focus_circle`, `draw_bbox`, `draw_crop_box`).
+6. Implement `utils` drawing/debug functions (`put_text`, `draw_circle`, `draw_bbox`).
 7. End-to-end pipeline in `h2v.py` with debug flag.
 8. Iterative improvement of `focus_tracker`: add tracking methods, confidence/zoom handling, plug-in smoothing strategies.
 9. Testing and validation on the 8-min sample video.
