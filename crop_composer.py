@@ -122,6 +122,7 @@ def apply_crop(
     input_path: str,
     output_path: str,
     focus_points: List[FocusPoint],
+    debug_collector=None,
 ) -> str:
     """
     Apply dynamic crop to convert horizontal video to vertical.
@@ -133,10 +134,13 @@ def apply_crop(
         input_path: Path to input video
         output_path: Path to output video
         focus_points: List of focus points for tracking
+        debug_collector: Optional DebugVideoCollector for creating debug video
 
     Returns:
         Path to output video
     """
+    import tempfile
+    import cv2
 
     # Step 1: Process all frames with OpenCV
     cap = cv2.VideoCapture(input_path)
@@ -151,16 +155,30 @@ def apply_crop(
     # Calculate smoothed crop windows
     crop_windows = smooth_crop_transitions(focus_points, frame_width, frame_height)
 
+    # Calculate the actual crop dimensions from the first crop window
+    # This gives us the real dimensions we'll be working with
+    if crop_windows:
+        first_crop = crop_windows[0]
+        crop_width = first_crop[2]  # width
+        crop_height = first_crop[3]  # height
+    else:
+        # Fallback: calculate crop dimensions for 9:16 aspect ratio
+        target_aspect_ratio = 9 / 16
+        if frame_width / frame_height > target_aspect_ratio:
+            crop_height = frame_height
+            crop_width = int(frame_height * target_aspect_ratio)
+        else:
+            crop_width = frame_width
+            crop_height = int(frame_width / target_aspect_ratio)
+
     # Create temporary video file for processed frames (no audio)
     with tempfile.NamedTemporaryFile(suffix='_temp_video.mp4', delete=False) as temp_video:
         temp_video_path = temp_video.name
 
     try:
-        # Set up OpenCV video writer for temporary file
-        target_width = 1080
-        target_height = 1920
+        # Set up OpenCV video writer with actual crop dimensions (no unnecessary resizing)
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        temp_writer = cv2.VideoWriter(temp_video_path, fourcc, fps, (target_width, target_height))
+        temp_writer = cv2.VideoWriter(temp_video_path, fourcc, fps, (crop_width, crop_height))
 
         # Process frames with OpenCV
         frame_idx = 0
@@ -176,23 +194,26 @@ def apply_crop(
                 # Use last crop window if we run out of focus points
                 crop_x, crop_y, crop_w, crop_h = crop_windows[-1] if crop_windows else (0, 0, frame_width, frame_height)
 
-            # Apply crop and resize
+            # Apply crop (no resizing needed since we're using actual crop dimensions)
             cropped_frame = frame[crop_y:crop_y+crop_h, crop_x:crop_x+crop_w]
-            resized_frame = cv2.resize(cropped_frame, (target_width, target_height))
-            temp_writer.write(resized_frame)
+            temp_writer.write(cropped_frame)
             frame_idx += 1
 
         cap.release()
         temp_writer.release()
 
-        # Step 2: Handle audio with FFmpeg
+        # Step 2: Handle audio with FFmpeg (resize to target resolution here if needed)
         try:
             # Check if input has audio stream
             probe = ffmpeg.probe(input_path)
             has_audio = any(stream['codec_type'] == 'audio' for stream in probe['streams'])
 
+            # Determine final output resolution (9:16 aspect ratio)
+            target_width = 1080
+            target_height = 1920
+
             if has_audio:
-                # Combine processed video with original audio
+                # Combine processed video with original audio, resize to target resolution
                 video_input = ffmpeg.input(temp_video_path)
                 audio_input = ffmpeg.input(input_path)['a']
 
@@ -204,17 +225,18 @@ def apply_crop(
                         vcodec='libx264',
                         acodec='aac',
                         audio_bitrate='128k',
-                        crf=23
+                        crf=23,
+                        s=f'{target_width}x{target_height}'  # Resize to target resolution
                     )
                     .overwrite_output()
                     .run(quiet=True)
                 )
             else:
-                # No audio, just copy the processed video
+                # No audio, just copy and resize the processed video
                 (
                     ffmpeg
                     .input(temp_video_path)
-                    .output(output_path, vcodec='libx264', crf=23)
+                    .output(output_path, vcodec='libx264', crf=23, s=f'{target_width}x{target_height}')
                     .overwrite_output()
                     .run(quiet=True)
                 )
@@ -222,8 +244,13 @@ def apply_crop(
         except ffmpeg.Error as e:
             raise RuntimeError(f"FFmpeg failed during audio processing: {e}")
 
+        # Step 3: Handle debug video creation if debug_collector provided
+        if debug_collector is not None:
+            debug_collector.save_video(fps)
+
     finally:
         # Clean up temporary file
+        import os
         if os.path.exists(temp_video_path):
             os.unlink(temp_video_path)
 

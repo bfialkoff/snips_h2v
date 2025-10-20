@@ -133,6 +133,7 @@ def process_video(
         input_path=input_path,
         output_path=output_path,
         focus_points=all_focus_points,
+        debug_collector=debug_collector,
     )
 
     # Step 4: Export Focus Points (auto-generate JSON path)
@@ -146,11 +147,7 @@ def process_video(
         output_path=focus_export_path
     )
 
-    # Save debug video if debug mode was enabled
-    if debug_collector:
-        if verbose:
-            print("Saving debug video...")
-        debug_collector.save_video()
+    # Debug video is now saved in apply_crop() function
 
     # Calculate processing statistics
     processing_time = time.time() - start_time
