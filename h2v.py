@@ -240,7 +240,7 @@ Examples:
     )
 
     parser.add_argument(
-        '--debug',
+        '--debug', '-d',
         action='store_true',
         help='Enable debug mode with visual overlays'
     )

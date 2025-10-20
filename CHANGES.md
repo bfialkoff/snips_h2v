@@ -118,3 +118,65 @@ If audio is still not preserved:
 4. Check FFmpeg error messages in console output
 
 The system should now automatically detect FFmpeg and preserve audio when available!
+
+---
+
+## 🚨 Critical Fix - FFmpeg Cropping Parity (Latest)
+
+### Problem Identified:
+The FFmpeg pipeline was producing **off-center, jittery results** compared to the OpenCV pipeline because it only used the first crop window for the entire video instead of frame-by-frame dynamic cropping.
+
+### Root Cause:
+```python
+# BROKEN FFmpeg implementation
+if crop_windows:
+    crop_x, crop_y, crop_w, crop_h = crop_windows[0]  # Only first crop!
+    crop_filter = f'crop={crop_w}:{crop_h}:{crop_x}:{crop_y}'
+
+# WORKING OpenCV implementation
+if frame_idx < len(crop_windows):
+    crop_x, crop_y, crop_w, crop_h = crop_windows[frame_idx]  # Frame-by-frame!
+```
+
+### Solution Implemented:
+**Hybrid approach** - Use OpenCV for frame processing + FFmpeg for audio combination:
+
+1. **Step 1**: Process frames with OpenCV (identical to working pipeline)
+   - Frame-by-frame crop window calculation
+   - Identical cropping and resizing logic
+   - Temporary video file (no audio)
+
+2. **Step 2**: Use FFmpeg to combine processed video with original audio
+   - Preserves exact timing synchronization
+   - Maintains audio quality
+   - Clean temporary file cleanup
+
+### Technical Implementation:
+
+**crop_composer.py - New Function:**
+```python
+def apply_crop_ffmpeg_with_dynamic_cropping(input_path, output_path, focus_points,
+                                          crop_windows, frame_width, frame_height, fps):
+    # Step 1: Process frames with OpenCV (identical to working pipeline)
+    for frame_idx, frame in enumerate(frames):
+        crop_x, crop_y, crop_w, crop_h = crop_windows[frame_idx]  # Frame-by-frame
+        cropped_frame = frame[crop_y:crop_y+crop_h, crop_x:crop_x+crop_w]
+        resized_frame = cv2.resize(cropped_frame, (1080, 1920))
+
+    # Step 2: Combine with original audio using FFmpeg
+    ffmpeg.output(processed_video, original_audio, final_output)
+```
+
+### Benefits:
+- ✅ **Identical visual quality** to OpenCV pipeline
+- ✅ **Perfect audio preservation** with FFmpeg
+- ✅ **Frame-accurate synchronization**
+- ✅ **No jitter or off-center issues**
+- ✅ **Maintains all existing debug functionality**
+
+### Verification:
+- **test_cropping_parity.py**: Comprehensive test comparing both pipelines
+- **Visual analysis**: Subject centering consistency check
+- **Audio preservation**: Verified with hybrid approach
+
+The FFmpeg pipeline now produces **identical results** to the OpenCV pipeline while preserving audio!

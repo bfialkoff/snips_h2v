@@ -102,68 +102,118 @@ def apply_crop_ffmpeg(input_path: str, output_path: str, focus_points: List[Focu
     # Calculate smoothed crop windows
     crop_windows = smooth_crop_transitions(focus_points, frame_width, frame_height)
 
-    # Create crop filter string for FFmpeg
-    # For simplicity in this minimal version, use the first crop window
-    # In a full implementation, we'd create keyframes for dynamic cropping
-    if crop_windows:
-        crop_x, crop_y, crop_w, crop_h = crop_windows[0]
-        crop_filter = f'crop={crop_w}:{crop_h}:{crop_x}:{crop_y}'
-    else:
-        # Default center crop to 9:16
-        crop_h = frame_height
-        crop_w = int(frame_height * 9 / 16)
-        crop_x = (frame_width - crop_w) // 2
-        crop_y = 0
-        crop_filter = f'crop={crop_w}:{crop_h}:{crop_x}:{crop_y}'
+    # For FFmpeg, we need to use the OpenCV approach for dynamic cropping
+    # because FFmpeg doesn't support frame-by-frame variable crop parameters easily
+    # We'll temporarily extract frames, process them, and re-encode with audio
+    return apply_crop_ffmpeg_with_dynamic_cropping(
+        input_path, output_path, focus_points, crop_windows,
+        frame_width, frame_height, fps
+    )
 
-    # Apply crop and scale to standard vertical resolution with audio preservation
+    return output_path
+
+
+def apply_crop_ffmpeg_with_dynamic_cropping(
+    input_path: str,
+    output_path: str,
+    focus_points: List[FocusPoint],
+    crop_windows: List[tuple],
+    frame_width: int,
+    frame_height: int,
+    fps: float
+) -> str:
+    """
+    Apply dynamic cropping using hybrid approach: OpenCV for frame processing + FFmpeg for audio.
+
+    This approach processes frames with OpenCV (like the working pipeline) but uses FFmpeg
+    to combine the processed video with the original audio.
+    """
+    import tempfile
+    import cv2
+
+    # Create temporary video file for processed frames (no audio)
+    with tempfile.NamedTemporaryFile(suffix='_temp_video.mp4', delete=False) as temp_video:
+        temp_video_path = temp_video.name
+
     try:
-        # Check if input has audio stream
-        probe = ffmpeg.probe(input_path)
-        has_audio = any(stream['codec_type'] == 'audio' for stream in probe['streams'])
+        # Step 1: Process video frames with OpenCV (same as working pipeline)
+        cap = cv2.VideoCapture(input_path)
 
-        input_stream = ffmpeg.input(input_path)
+        if not cap.isOpened():
+            raise ValueError(f"Could not open video: {input_path}")
 
-        # Process video: crop and scale
-        video_stream = (
-            input_stream['v']
-            .filter('crop', crop_w, crop_h, crop_x, crop_y)
-            .filter('scale', 1080, 1920)
-        )
+        # Set up video writer for temporary file
+        target_width = 1080
+        target_height = 1920
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        temp_writer = cv2.VideoWriter(temp_video_path, fourcc, fps, (target_width, target_height))
 
-        if has_audio:
-            # Combine video and audio streams
-            (
-                ffmpeg
-                .output(
-                    video_stream, input_stream['a'],
-                    output_path,
-                    vcodec='libx264',
-                    acodec='aac',
-                    audio_bitrate='128k',
-                    crf=23
+        frame_idx = 0
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            # Get crop window for this frame (same logic as OpenCV pipeline)
+            if frame_idx < len(crop_windows):
+                crop_x, crop_y, crop_w, crop_h = crop_windows[frame_idx]
+            else:
+                crop_x, crop_y, crop_w, crop_h = crop_windows[-1] if crop_windows else (0, 0, frame_width, frame_height)
+
+            # Apply crop (same as OpenCV pipeline)
+            cropped_frame = frame[crop_y:crop_y+crop_h, crop_x:crop_x+crop_w]
+
+            # Resize to target resolution (same as OpenCV pipeline)
+            resized_frame = cv2.resize(cropped_frame, (target_width, target_height))
+
+            temp_writer.write(resized_frame)
+            frame_idx += 1
+
+        cap.release()
+        temp_writer.release()
+
+        # Step 2: Use FFmpeg to combine processed video with original audio
+        try:
+            # Check if input has audio stream
+            probe = ffmpeg.probe(input_path)
+            has_audio = any(stream['codec_type'] == 'audio' for stream in probe['streams'])
+
+            if has_audio:
+                # Combine processed video with original audio
+                video_input = ffmpeg.input(temp_video_path)
+                audio_input = ffmpeg.input(input_path)['a']
+
+                (
+                    ffmpeg
+                    .output(
+                        video_input, audio_input,
+                        output_path,
+                        vcodec='libx264',
+                        acodec='aac',
+                        audio_bitrate='128k',
+                        crf=23
+                    )
+                    .overwrite_output()
+                    .run(quiet=True)
                 )
-                .overwrite_output()
-                .run(quiet=True)
-            )
-        else:
-            # Video only (no audio stream in input)
-            (
-                ffmpeg
-                .output(
-                    video_stream,
-                    output_path,
-                    vcodec='libx264',
-                    crf=23
+            else:
+                # No audio, just copy the processed video
+                (
+                    ffmpeg
+                    .input(temp_video_path)
+                    .output(output_path, vcodec='libx264', crf=23)
+                    .overwrite_output()
+                    .run(quiet=True)
                 )
-                .overwrite_output()
-                .run(quiet=True)
-            )
 
-    except ffmpeg.Error as e:
-        raise RuntimeError(f"FFmpeg error: {e}")
-    except Exception as e:
-        raise RuntimeError(f"Video processing error: {e}")
+        except ffmpeg.Error as e:
+            raise RuntimeError(f"FFmpeg error during audio combination: {e}")
+
+    finally:
+        # Clean up temporary file
+        import os
+        if os.path.exists(temp_video_path):
+            os.unlink(temp_video_path)
 
     return output_path
 
