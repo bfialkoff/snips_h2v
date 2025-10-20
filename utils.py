@@ -1,5 +1,8 @@
 import time
+import os
 from typing import Iterator, Tuple, List, Optional, Union
+import tempfile
+import shutil
 
 import cv2
 import numpy as np
@@ -336,22 +339,30 @@ def add_debug_overlay(
     Args:
         frame: Input frame
         detection_type: Type of detection ("Face detected", "Person detected", etc.)
-        focus_point: Normalized focus coordinates (x, y)
+        focus_point: Normalized focus coordinates (x, y) in range [0, 1]
         confidence: Detection confidence (0-1)
-        bbox: Optional bounding box for detected object
-        crop_coords: Optional crop coordinates to visualize
+        bbox: Optional bounding box for detected object (x1, y1, x2, y2) in pixels
+        crop_coords: Optional crop coordinates to visualize (x1, y1, x2, y2) in pixels
         shot_id: Current shot ID (1-based)
         total_shots: Total number of shots
         global_frame_idx: Global frame counter across all shots
-        detection_stats: Current detection statistics
+        total_frames: Total frame count across all shots
 
     Returns:
         Frame with comprehensive debug overlays
     """
     height, width = frame.shape[:2]
 
+    # Denormalize focus coordinates once
+    focus_x = int(focus_point[0] * width)
+    focus_y = int(focus_point[1] * height)
+
+    # Calculate responsive text positions based on frame size
+    margin = max(10, width // 192)  # Responsive margin (10px for 1920px width)
+    line_height = max(25, height // 43)  # Responsive line height (25px for 1080px height)
+    text_size_scale = min(width / 1920, height / 1080)  # Scale factor for text positioning
+
     # Color code detection status
-    status_color = (0, 255, 0)  # Default green
     if 'face' in detection_type.lower():
         status_color = (0, 255, 0)  # Green
     elif 'person' in detection_type.lower():
@@ -360,34 +371,42 @@ def add_debug_overlay(
         status_color = (0, 255, 255)  # Yellow
     elif 'no humans' in detection_type.lower():
         status_color = (0, 0, 255)  # Red
+    else:
+        status_color = (0, 255, 0)  # Default green
 
-    # Add detection status text with color coding
+    # Add text overlays with responsive positioning
+    current_y = margin + line_height
+
+    # Detection status
     status_text = f"{detection_type} (conf: {confidence:.2f})"
-    frame = put_text(frame, status_text, (10, 30), status_color)
+    frame = put_text(frame, status_text, (margin, current_y), status_color)
+    current_y += line_height
 
-    # Add shot information if available
+    # Shot information
     if shot_id is not None and total_shots is not None:
         shot_text = f"Shot {shot_id}/{total_shots}"
-        frame = put_text(frame, shot_text, (10, 60), (255, 255, 255))
+        frame = put_text(frame, shot_text, (margin, current_y), (255, 255, 255))
+        current_y += line_height
 
-    # Add global frame counter if available
+    # Global frame counter
     if global_frame_idx is not None:
         if total_frames is not None:
             frame_text = f"Frame {global_frame_idx}/{total_frames}"
         else:
             frame_text = f"Frame #{global_frame_idx}"
-        frame = put_text(frame, frame_text, (10, 90), (200, 200, 200))
+        frame = put_text(frame, frame_text, (margin, current_y), (200, 200, 200))
+        current_y += line_height
 
-    # Add focus coordinates
-    focus_text = f"Focus: ({focus_point[0]:.3f}, {focus_point[1]:.3f})"
-    y_pos = 120 if shot_id is not None else 60
-    frame = put_text(frame, focus_text, (10, y_pos), (255, 255, 0))
+    # Focus coordinates (show both normalized and pixel values)
+    focus_text = f"Focus: ({focus_point[0]:.3f}, {focus_point[1]:.3f}) -> ({focus_x}, {focus_y})"
+    frame = put_text(frame, focus_text, (margin, current_y), (255, 255, 0))
+    current_y += line_height
 
-    # Draw focus circle
-    # frame = draw_circle(frame, denormalize_coordinates(focus_point[0], focus_point[1], height, width), 20)
-    frame = draw_focus_circle(frame, focus_point[0], focus_point[1])
+    # Draw focus circle at absolute coordinates
+    radius = max(15, int(20 * text_size_scale))  # Responsive radius
+    frame = draw_circle(frame, (focus_x, focus_y), radius, (0, 255, 255))
 
-    # Draw bounding box if provided
+    # Draw bounding box if provided (should already be in absolute coordinates)
     if bbox is not None:
         frame = draw_bbox(frame, bbox, (255, 0, 0))
 
@@ -395,23 +414,23 @@ def add_debug_overlay(
         bbox_width = bbox[2] - bbox[0]
         bbox_height = bbox[3] - bbox[1]
         bbox_text = f"BBox: {bbox_width:.0f}x{bbox_height:.0f}"
-        y_pos = 150 if shot_id is not None else 90
-        frame = put_text(frame, bbox_text, (10, y_pos), (255, 0, 255))
+        frame = put_text(frame, bbox_text, (margin, current_y), (255, 0, 255))
+        current_y += line_height
 
-    # Draw crop rectangle if provided
+    # Draw crop rectangle if provided (should already be in absolute coordinates)
     if crop_coords is not None:
         frame = draw_bbox(frame, crop_coords, (0, 0, 255))
 
-        # Add crop info - convert (x1,y1,x2,y2) to width,height
-        crop_width = crop_coords[2] - crop_coords[0]  # x2 - x1
-        crop_height = crop_coords[3] - crop_coords[1]  # y2 - y1
+        # Add crop info
+        crop_width = crop_coords[2] - crop_coords[0]
+        crop_height = crop_coords[3] - crop_coords[1]
         crop_text = f"Crop: {crop_width}x{crop_height} at ({crop_coords[0]}, {crop_coords[1]})"
-        y_pos = 180 if shot_id is not None else 120
-        frame = put_text(frame, crop_text, (10, y_pos), (0, 0, 255))
+        frame = put_text(frame, crop_text, (margin, current_y), (0, 0, 255))
 
-    # Add timestamp
+    # Add timestamp (positioned relative to frame width)
     timestamp = time.strftime("%H:%M:%S")
-    frame = put_text(frame, f"Time: {timestamp}", (width - 150, 30), (255, 255, 255))
+    timestamp_x = width - int(150 * text_size_scale)
+    frame = put_text(frame, f"Time: {timestamp}", (timestamp_x, margin + line_height), (255, 255, 255))
 
     return frame
 
@@ -435,7 +454,6 @@ class DebugVideoCollector:
         self.total_frames_expected = None  # Will be set when known
 
         # Create temporary directory for frame images
-        import tempfile
         self.temp_dir = tempfile.mkdtemp()
 
         # Track video properties
@@ -593,24 +611,20 @@ class DebugVideoCollector:
                     else:
                         print(f"Debug video is {duration_ratio:.1f}x longer than original - creating without audio to prevent confusion")
                         # Debug video too long, create without audio
-                        import shutil
                         shutil.move(temp_video_path, self.output_path)
                         return self.output_path
 
                     # Clean up temp video file
-                    import os
                     os.unlink(temp_video_path)
 
                 else:
                     print("Original video has no audio, creating video-only debug file")
                     # No audio, just rename the temp file
-                    import shutil
                     shutil.move(temp_video_path, self.output_path)
 
             except ffmpeg.Error as e:
                 print(f"FFmpeg audio processing failed: {e}")
                 print("Falling back to video-only debug file")
-                import shutil
                 shutil.move(temp_video_path, self.output_path)
 
         except ffmpeg.Error as e:
@@ -619,7 +633,6 @@ class DebugVideoCollector:
 
         finally:
             # Clean up temporary directory
-            import shutil
             shutil.rmtree(self.temp_dir)
 
         print(f"Debug video saved: {self.output_path}")
@@ -858,32 +871,26 @@ def draw_focus_circle(frame: np.ndarray, x: float, y: float, radius: int = 20,
     return frame
 
 
-def draw_circle(
-        img,
-        center: tuple,
-        radius: int,
-        color=(0, 255, 0),
-        thickness=2,
-        outline_thickness=4,
-        line_type=cv2.LINE_AA
-):
+def draw_circle(frame: np.ndarray, center: Tuple[int, int], radius: int = 20,
+                color: Tuple[int, int, int] = (0, 255, 255)) -> np.ndarray:
     """
-    Draw a circle with a black outline for better visibility.
+    Draw a circle with black outline for better visibility.
 
     Args:
-        img: Image to draw on (numpy array).
-        center: (x, y) coordinates of circle center.
-        radius: Circle radius in pixels.
-        color: Circle color (B, G, R).
-        thickness: Thickness of colored circle.
-        outline_thickness: Thickness of black outline circle.
-        line_type: OpenCV line type.
+        frame: Input frame
+        center: (x, y) coordinates of circle center
+        radius: Circle radius in pixels
+        color: BGR color tuple (default: yellow)
+
+    Returns:
+        Frame with circle drawn
     """
-    # Black outline
-    cv2.circle(img, center, radius, (0, 0, 0), outline_thickness, line_type)
-    # Colored circle on top
-    cv2.circle(img, center, radius, color, thickness, line_type)
-    return img
+    x, y = center
+    thickness = 2
+    # Black outline for better visibility
+    cv2.circle(frame, (x, y), radius, (0, 0, 0), thickness + 2)
+    cv2.circle(frame, (x, y), radius, color, thickness)
+    return frame
 
 
 if __name__ == '__main__':
