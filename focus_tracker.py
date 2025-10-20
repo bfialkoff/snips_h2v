@@ -184,9 +184,9 @@ def track_focus(
             # Get detailed focus information
             x, y, confidence, detection_type, bbox = tracker.get_primary_focus(frame, debug=True)
 
-            # Calculate crop window for visualization
+            # Calculate crop coordinates for visualization
             height, width = frame.shape[:2]
-            crop_coords = utils.calculate_crop_window(x, y, width, height)
+            crop_coords = utils.calculate_crop_coordinates(x, y, height, width)
 
             # Add frame to debug collector
             debug_collector.add_frame(

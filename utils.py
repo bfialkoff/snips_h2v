@@ -4,7 +4,7 @@ from typing import Iterator, Tuple, List, Optional, Union
 import cv2
 import numpy as np
 from scipy.ndimage import gaussian_filter1d
-import matplotlib.pyplot as plt
+import ffmpeg
 
 
 def calculate_crop_window(focus_x: float, focus_y: float, frame_width: int, frame_height: int) -> tuple:
@@ -313,6 +313,7 @@ def calculate_crop_coordinates(
         crop_width = frame_width
         crop_height = int(frame_width / target_aspect_ratio)
 
+
     # Convert normalized focus to pixel coordinates
     focus_x_px = center_x * frame_width
     focus_y_px = center_y * frame_height
@@ -404,21 +405,21 @@ def draw_crop_box(frame: np.ndarray, crop_coords: Tuple[int, int, int, int], col
 
     Args:
         frame: Input frame
-        crop_coords: Crop coordinates as (x, y, width, height)
+        crop_coords: Crop coordinates as (x1, y1, x2, y2)
         color: BGR color tuple (default: red)
         thickness: Line thickness
 
     Returns:
         Frame with crop rectangle
     """
-    x, y, w, h = crop_coords
-    cv2.rectangle(frame, (x, y), (x + w, y + h), color, thickness)
+    x1, y1, x2, y2 = crop_coords
+    cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
 
     # Add corner markers for better visibility
     corner_size = 20
     corners = [
-        (x, y), (x + w, y),  # Top corners
-        (x, y + h), (x + w, y + h)  # Bottom corners
+        (x1, y1), (x2, y1),  # Top corners
+        (x1, y2), (x2, y2)   # Bottom corners
     ]
 
     for corner_x, corner_y in corners:
@@ -437,7 +438,8 @@ def add_debug_overlay(
         crop_coords: Optional[Tuple[int, int, int, int]] = None,
         shot_id: Optional[int] = None,
         total_shots: Optional[int] = None,
-        global_frame_idx: Optional[int] = None
+        global_frame_idx: Optional[int] = None,
+        total_frames: Optional[int] = None
 ) -> np.ndarray:
     """
     Add comprehensive debug overlay to frame with shot and frame tracking.
@@ -481,7 +483,10 @@ def add_debug_overlay(
 
     # Add global frame counter if available
     if global_frame_idx is not None:
-        frame_text = f"Frame #{global_frame_idx}"
+        if total_frames is not None:
+            frame_text = f"Frame {global_frame_idx}/{total_frames}"
+        else:
+            frame_text = f"Frame #{global_frame_idx}"
         frame = put_text(frame, frame_text, (10, 90), (200, 200, 200))
 
     # Add focus coordinates
@@ -507,8 +512,10 @@ def add_debug_overlay(
     if crop_coords is not None:
         frame = draw_crop_box(frame, crop_coords, (0, 0, 255))
 
-        # Add crop info
-        crop_text = f"Crop: {crop_coords[2]}x{crop_coords[3]} at ({crop_coords[0]}, {crop_coords[1]})"
+        # Add crop info - convert (x1,y1,x2,y2) to width,height
+        crop_width = crop_coords[2] - crop_coords[0]  # x2 - x1
+        crop_height = crop_coords[3] - crop_coords[1]  # y2 - y1
+        crop_text = f"Crop: {crop_width}x{crop_height} at ({crop_coords[0]}, {crop_coords[1]})"
         y_pos = 180 if shot_id is not None else 120
         frame = put_text(frame, crop_text, (10, y_pos), (0, 0, 255))
 
@@ -521,12 +528,13 @@ def add_debug_overlay(
 
 class DebugVideoCollector:
     """
-    Centralized collector for debug frames to create a single continuous debug video.
+    Centralized collector for debug frames to create a single continuous debug video with audio.
+    Uses hybrid OpenCV (for drawing) + FFmpeg (for video creation with audio) approach.
     """
 
-    def __init__(self, output_path: str):
+    def __init__(self, output_path: str, original_video_path: str):
         self.output_path = output_path
-        self.frames = []
+        self.original_video_path = original_video_path
         self.detection_stats = {
             'face_detected': 0,
             'person_detected': 0,
@@ -534,6 +542,18 @@ class DebugVideoCollector:
             'no_humans_detected': 0
         }
         self.global_frame_counter = 0
+        self.total_frames_expected = None  # Will be set when known
+
+        # Create temporary directory for frame images
+        import tempfile
+        self.temp_dir = tempfile.mkdtemp()
+
+        # Track video properties
+        self.video_properties = None
+
+    def set_total_frames(self, total_frames: int) -> None:
+        """Set the total expected number of frames for proper progress tracking."""
+        self.total_frames_expected = total_frames
 
     def add_frame(self,
                   frame: np.ndarray,
@@ -547,6 +567,7 @@ class DebugVideoCollector:
                   ) -> None:
         """
         Add a frame to the debug collection with comprehensive annotations.
+        Saves frame as image file to temporary directory.
 
         Args:
             frame: Input frame
@@ -560,6 +581,11 @@ class DebugVideoCollector:
         """
         self.global_frame_counter += 1
 
+        # Store video properties from first frame
+        if self.video_properties is None:
+            height, width = frame.shape[:2]
+            self.video_properties = {'width': width, 'height': height}
+
         # Track detection statistics
         detection_key = detection_type.lower().replace(' ', '_')
         if detection_key in self.detection_stats:
@@ -567,6 +593,8 @@ class DebugVideoCollector:
 
         # Create debug frame with enhanced annotations
         debug_frame = frame.copy()
+
+        # Update add_debug_overlay call to use global frame counter with total
         debug_frame = add_debug_overlay(
             debug_frame,
             detection_type,
@@ -577,14 +605,17 @@ class DebugVideoCollector:
             shot_id=shot_id,
             total_shots=total_shots,
             global_frame_idx=self.global_frame_counter,
-            detection_stats=self.detection_stats
+            total_frames=self.total_frames_expected
         )
 
-        self.frames.append(debug_frame)
+        # Save frame as image file
+        frame_path = f"{self.temp_dir}/frame_{self.global_frame_counter:06d}.png"
+        cv2.imwrite(frame_path, debug_frame)
 
-    def save_video(self, fps: float = 30.0) -> str:
+    def save_video(self, fps: float = None) -> str:
         """
-        Save collected debug frames as a single continuous video.
+        Save collected debug frames as a single continuous video with audio using FFmpeg.
+        Uses hybrid OpenCV (for drawing) + FFmpeg (for video creation with audio) approach.
 
         Args:
             fps: Frames per second for output video
@@ -592,43 +623,130 @@ class DebugVideoCollector:
         Returns:
             Path to saved debug video
         """
-        if not self.frames:
+        if self.global_frame_counter == 0:
             print("⚠️ No debug frames to save")
             return self.output_path
 
-        # Add final summary frame
-        self._add_summary_frame()
-
-        height, width = self.frames[0].shape[:2]
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-
         try:
-            writer = cv2.VideoWriter(self.output_path, fourcc, fps, (width, height))
+            # Step 1: Get original video fps if not provided
+            if fps is None:
+                probe = ffmpeg.probe(self.original_video_path)
+                video_stream = next((stream for stream in probe['streams'] if stream['codec_type'] == 'video'), None)
+                if video_stream and 'r_frame_rate' in video_stream:
+                    fps_str = video_stream['r_frame_rate']
+                    if '/' in fps_str:
+                        num, den = fps_str.split('/')
+                        fps = float(num) / float(den)
+                    else:
+                        fps = float(fps_str)
+                else:
+                    fps = 30.0  # Fallback
+                print(f"🎬 Using original video fps: {fps:.2f}")
 
-            for frame in self.frames:
-                writer.write(frame)
+            # Step 2: Create summary frame and save it
+            self._add_summary_frame()
+
+            # Step 3: Create video from image sequence using FFmpeg
+            temp_video_path = f"{self.output_path}_no_audio.mp4"
+
+            print(f"🎬 Creating debug video from {self.global_frame_counter} frames at {fps:.2f} fps...")
+
+            (
+                ffmpeg
+                .input(f"{self.temp_dir}/frame_%06d.png", framerate=fps)
+                .output(
+                    temp_video_path,
+                    vcodec='libx264',
+                    pix_fmt='yuv420p',
+                    crf=23
+                )
+                .overwrite_output()
+                .run(quiet=True)
+            )
+
+            # Step 3: Check if original video has audio and combine if it does
+            try:
+                probe = ffmpeg.probe(self.original_video_path)
+                has_audio = any(stream['codec_type'] == 'audio' for stream in probe['streams'])
+
+                if has_audio:
+                    print("🎵 Adding synchronized audio to debug video...")
+
+                    # Get timing information
+                    video_duration = float(probe['streams'][0]['duration'])
+                    debug_duration = self.global_frame_counter / fps
+
+                    video_input = ffmpeg.input(temp_video_path)
+
+                    # Strategy: Use original audio but adjust timing to better match debug frames
+                    # If debug video is shorter or similar, use original audio with duration limit
+                    # If debug video is much longer, skip audio to avoid confusion
+
+                    duration_ratio = debug_duration / video_duration
+
+                    if duration_ratio <= 1.5:  # Debug video not much longer than original
+                        audio_input = ffmpeg.input(self.original_video_path)['a']
+
+                        (
+                            ffmpeg
+                            .output(
+                                video_input, audio_input,
+                                self.output_path,
+                                vcodec='copy',
+                                acodec='aac',
+                                audio_bitrate='128k',
+                                shortest=None  # Don't cut based on shortest stream
+                            )
+                            .overwrite_output()
+                            .run(quiet=True)
+                        )
+                    else:
+                        print(f"⚠️ Debug video is {duration_ratio:.1f}x longer than original - creating without audio to prevent confusion")
+                        # Debug video too long, create without audio
+                        import shutil
+                        shutil.move(temp_video_path, self.output_path)
+                        return self.output_path
+
+                    # Clean up temp video file
+                    import os
+                    os.unlink(temp_video_path)
+
+                else:
+                    print("🔇 Original video has no audio, creating video-only debug file")
+                    # No audio, just rename the temp file
+                    import shutil
+                    shutil.move(temp_video_path, self.output_path)
+
+            except ffmpeg.Error as e:
+                print(f"⚠️ FFmpeg audio processing failed: {e}")
+                print("📹 Falling back to video-only debug file")
+                import shutil
+                shutil.move(temp_video_path, self.output_path)
+
+        except ffmpeg.Error as e:
+            print(f"❌ FFmpeg video creation failed: {e}")
+            raise RuntimeError(f"Failed to create debug video: {e}")
 
         finally:
-            writer.release()
+            # Clean up temporary directory
+            import shutil
+            shutil.rmtree(self.temp_dir)
 
         print(f"🐛 Debug video saved: {self.output_path}")
-        print(f"📊 Total frames: {len(self.frames)}")
+        print(f"📊 Total frames: {self.global_frame_counter}")
         self._print_detection_summary()
 
         return self.output_path
 
     def _add_summary_frame(self):
-        """Add a summary frame with overall statistics at the end."""
-        if not self.frames:
+        """Add summary frames with overall statistics at the end."""
+        if self.global_frame_counter == 0 or self.video_properties is None:
             return
 
-        # Create summary frame based on last frame
-        summary_frame = self.frames[-1].copy()
-
-        # Black overlay for text
-        overlay = summary_frame.copy()
-        cv2.rectangle(overlay, (0, 0), (summary_frame.shape[1], summary_frame.shape[0]), (0, 0, 0), -1)
-        summary_frame = cv2.addWeighted(summary_frame, 0.3, overlay, 0.7, 0)
+        # Create a black summary frame
+        width = self.video_properties['width']
+        height = self.video_properties['height']
+        summary_frame = np.zeros((height, width, 3), dtype=np.uint8)
 
         # Add summary statistics
         total_detections = sum(self.detection_stats.values())
@@ -637,32 +755,38 @@ class DebugVideoCollector:
         put_text(summary_frame, "🎬 DEBUG VIDEO SUMMARY", (50, y_pos), (0, 255, 255))
         y_pos += 60
 
-        put_text(summary_frame, f"Total Frames: {len(self.frames)}", (50, y_pos), (255, 255, 255))
+        put_text(summary_frame, f"Total Frames: {self.global_frame_counter}", (50, y_pos), (255, 255, 255))
         y_pos += 40
 
         if total_detections > 0:
             for detection_type, count in self.detection_stats.items():
-                percentage = (count / total_detections) * 100
-                display_name = detection_type.replace('_', ' ').title()
-                text = f"{display_name}: {count} ({percentage:.1f}%)"
+                if count > 0:  # Only show types that occurred
+                    percentage = (count / total_detections) * 100
+                    display_name = detection_type.replace('_', ' ').title()
+                    text = f"{display_name}: {count} ({percentage:.1f}%)"
 
-                # Color code by detection type
-                color = (0, 255, 0)  # Default green
-                if 'face' in detection_type:
-                    color = (0, 255, 0)  # Green
-                elif 'person' in detection_type:
-                    color = (255, 0, 0)  # Blue
-                elif 'motion' in detection_type:
-                    color = (0, 255, 255)  # Yellow
-                elif 'no_humans' in detection_type:
-                    color = (0, 0, 255)  # Red
+                    # Color code by detection type
+                    color = (0, 255, 0)  # Default green
+                    if 'face' in detection_type:
+                        color = (0, 255, 0)  # Green
+                    elif 'person' in detection_type:
+                        color = (255, 0, 0)  # Blue
+                    elif 'motion' in detection_type:
+                        color = (0, 255, 255)  # Yellow
+                    elif 'no_humans' in detection_type:
+                        color = (0, 0, 255)  # Red
 
-                put_text(summary_frame, text, (50, y_pos), color)
-                y_pos += 40
+                    put_text(summary_frame, text, (50, y_pos), color)
+                    y_pos += 40
 
-        # Add summary frame multiple times so it's visible for a few seconds
-        for _ in range(90):  # 3 seconds at 30fps
-            self.frames.append(summary_frame.copy())
+        # Save summary frame multiple times so it's visible for a few seconds (3 seconds at 30fps)
+        for i in range(90):
+            frame_number = self.global_frame_counter + 1 + i
+            frame_path = f"{self.temp_dir}/frame_{frame_number:06d}.png"
+            cv2.imwrite(frame_path, summary_frame)
+
+        # Update global frame counter to include summary frames
+        self.global_frame_counter += 90
 
     def _print_detection_summary(self):
         """Print detection statistics to console."""

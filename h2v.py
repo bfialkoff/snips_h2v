@@ -99,7 +99,25 @@ def process_video(
     debug_collector = None
     if debug:
         debug_output_path = f"debug_{Path(output_path).name}"
-        debug_collector = utils.DebugVideoCollector(debug_output_path)
+        debug_collector = utils.DebugVideoCollector(debug_output_path, input_path)
+
+        # Calculate total expected frames for proper progress tracking
+        # This should be the number of frames that will actually be processed (with stride)
+        import cv2
+        cap = cv2.VideoCapture(input_path)
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        cap.release()
+
+        # Calculate frames that will be processed across all shots
+        total_processed_frames = 0
+        for shot in shots:
+            shot_duration = shot.end - shot.start
+            shot_frames = int(shot_duration * fps)
+            # Apply stride to get actual processed frames
+            processed_frames_in_shot = (shot_frames // stride) + (1 if shot_frames % stride > 0 else 0)
+            total_processed_frames += processed_frames_in_shot
+
+        debug_collector.set_total_frames(total_processed_frames)
 
     for i, shot in enumerate(shots):
         if verbose:

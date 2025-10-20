@@ -251,6 +251,8 @@ def apply_crop_opencv(
                 focus_x, focus_y, confidence = 0.5, 0.5, 0.0
 
             # Add frame to debug collector with crop processing context
+            # Convert (x, y, w, h) to (x1, y1, x2, y2) format for debug display
+            crop_coords_debug = (crop_x, crop_y, crop_x + crop_w, crop_y + crop_h)
             debug_collector.add_frame(
                 frame=frame,
                 shot_id=1,  # Will be updated by caller to provide proper shot context
@@ -259,7 +261,7 @@ def apply_crop_opencv(
                 focus_point=(focus_x, focus_y),
                 confidence=confidence,
                 bbox=None,
-                crop_coords=(crop_x, crop_y, crop_w, crop_h)
+                crop_coords=crop_coords_debug
             )
 
         # Apply crop
@@ -298,10 +300,12 @@ def apply_crop(
     Returns:
         Path to output video
     """
-    if use_ffmpeg and not debug_collector:
+    if use_ffmpeg:
+        # Always use FFmpeg when available for audio preservation
+        # Debug collector will be handled separately if provided
         return apply_crop_ffmpeg(input_path, output_path, focus_points)
     else:
-        # Use OpenCV for debug mode or if explicitly requested
+        # Fallback to OpenCV when FFmpeg not available
         return apply_crop_opencv(
             input_path,
             output_path,
