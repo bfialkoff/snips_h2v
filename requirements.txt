@@ -1,0 +1,11 @@
+scenedetect[opencv]>=0.6.2
+opencv-python>=4.8.0
+numpy>=1.24.0
+torch>=2.0.0
+torchvision>=0.15.0
+ultralytics>=8.0.0
+ffmpeg-python>=0.2.0
+scipy>=1.10.0
+scikit-image
+# Note: The yolo-face.pt model file needs to be downloaded separately
+# and placed in the project directory for face detection to work.
